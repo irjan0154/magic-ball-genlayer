@@ -3,15 +3,16 @@ import { testnetAsimov } from 'genlayer-js/chains';
 import { TransactionStatus } from 'genlayer-js/types';
 
 const CONTRACT_ADDRESS = '0x87be8D5C2D45B8Eb7a8eFDC8e5829c97d05bA1c7';
-const GEN_PRICE = BigInt('1000000000000000000'); // 1 GEN в wei
-const REQUIRED_CHAIN_ID = '0x107D'; // GenLayer Asimov = 4221
+const GEN_PRICE = BigInt('1000000000000000000'); // 1 GEN in wei
+const REQUIRED_CHAIN_ID = '0x107D'; // 4221 decimal
 
+// Точные параметры сети — как в кране GenLayer
 const GENLAYER_NETWORK = {
   chainId: REQUIRED_CHAIN_ID,
-  chainName: 'GenLayer Asimov Testnet',
+  chainName: 'GenLayer Testnet Chain',
   nativeCurrency: { name: 'GEN', symbol: 'GEN', decimals: 18 },
-  rpcUrls: ['https://rpc.asimov.genlayer.com'],
-  blockExplorerUrls: ['https://studio.genlayer.com'],
+  rpcUrls: ['https://zksync-os-testnet-genlayer.zksync.dev'],
+  blockExplorerUrls: ['https://zksync-os-testnet-genlayer.explorer.zksync.dev'],
 };
 
 // ── STATE ──
@@ -20,6 +21,18 @@ let walletAddress = null;
 let isAsking = false;
 let glClient = null;
 let correctNetwork = false;
+let provider = null; // универсальный EVM провайдер
+
+// ── DETECT ANY EVM WALLET ──
+// Работает с MetaMask, Rabby, OKX, Coinbase, Trust Wallet и любым EIP-1193 кошельком
+function getProvider() {
+  // window.ethereum — стандартный EIP-1193 провайдер
+  // поддерживается всеми современными EVM кошельками
+  if (typeof window.ethereum !== 'undefined') {
+    return window.ethereum;
+  }
+  return null;
+}
 
 // ── INIT SDK CLIENT ──
 function initClient(account) {
@@ -27,37 +40,45 @@ function initClient(account) {
     chain: testnetAsimov,
     account: account || undefined,
   });
-  console.log('GenLayer client initialized on testnetAsimov');
+  console.log('GenLayer client initialized');
 }
 
 // ── NETWORK CHECK ──
 async function checkNetwork() {
-  if (typeof window.ethereum === 'undefined') return false;
-  const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-  correctNetwork = chainId === REQUIRED_CHAIN_ID;
-  return correctNetwork;
+  if (!provider) return false;
+  try {
+    const chainId = await provider.request({ method: 'eth_chainId' });
+    correctNetwork = chainId === REQUIRED_CHAIN_ID;
+    return correctNetwork;
+  } catch (e) {
+    return false;
+  }
 }
 
 async function switchToGenLayer() {
+  if (!provider) return;
   try {
-    await window.ethereum.request({
+    // Сначала пробуем переключиться (если сеть уже добавлена)
+    await provider.request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: REQUIRED_CHAIN_ID }],
     });
     correctNetwork = true;
-    showToastMsg('Switched to GenLayer Asimov Testnet ✓');
   } catch (err) {
-    if (err.code === 4902) {
+    // Код 4902 — сеть не добавлена, добавляем
+    if (err.code === 4902 || err.message?.includes('Unrecognized chain')) {
       try {
-        await window.ethereum.request({
+        await provider.request({
           method: 'wallet_addEthereumChain',
           params: [GENLAYER_NETWORK],
         });
         correctNetwork = true;
-        showToastMsg('GenLayer Asimov Testnet added ✓');
       } catch (addErr) {
-        showToastMsg('Failed to add network. Please add it manually in MetaMask.');
+        console.error('Failed to add network:', addErr);
+        showToastMsg('Could not add network automatically. Please add it manually.');
       }
+    } else {
+      console.error('Failed to switch network:', err);
     }
   }
 }
@@ -68,6 +89,7 @@ window.switchNetwork = async function () {
   if (ok) {
     hideNetworkWarning();
     if (walletAddress) initClient(walletAddress);
+    showToastMsg('Connected to GenLayer Testnet Chain ✓');
   }
 };
 
@@ -99,9 +121,11 @@ function showNetworkWarning() {
     document.body.appendChild(banner);
   }
   banner.innerHTML = `
-    <div style="margin-bottom:8px;font-size:11px;letter-spacing:0.2em;color:#f87171;">⚠ WRONG NETWORK</div>
+    <div style="margin-bottom:8px;font-size:11px;letter-spacing:0.2em;color:#f87171;">
+      ⚠ WRONG NETWORK
+    </div>
     <div style="color:#e2c97e;margin-bottom:12px;">
-      Switch to <strong>GenLayer Asimov Testnet</strong> to use the oracle
+      Switch to <strong>GenLayer Testnet Chain</strong> to use the oracle
     </div>
     <button onclick="window.switchNetwork()" style="
       background: linear-gradient(135deg, #7c3aed, #a855f7);
@@ -111,7 +135,10 @@ function showNetworkWarning() {
       letter-spacing: 0.06em;
       padding: 8px 22px;
       border-radius: 8px; cursor: pointer;
-    ">Switch Network</button>
+      transition: all 0.2s ease;
+    " onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+      Switch Network
+    </button>
   `;
   banner.style.display = 'block';
 }
@@ -127,12 +154,23 @@ window.connectWallet = async function () {
     disconnectWallet();
     return;
   }
-  if (typeof window.ethereum === 'undefined') {
-    showToastMsg('Please install MetaMask');
+
+  // Ищем любой EVM кошелёк
+  provider = getProvider();
+
+  if (!provider) {
+    showToastMsg('No wallet detected. Please install MetaMask, Rabby, OKX or any EVM wallet.');
     return;
   }
+
   try {
-    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    const accounts = await provider.request({ method: 'eth_requestAccounts' });
+
+    if (!accounts || accounts.length === 0) {
+      showToastMsg('No accounts found. Please unlock your wallet.');
+      return;
+    }
+
     walletAddress = accounts[0];
     walletConnected = true;
 
@@ -147,9 +185,37 @@ window.connectWallet = async function () {
     const ok = await checkNetwork();
     if (!ok) showNetworkWarning();
 
+    // Слушаем смену сети и аккаунта
+    provider.on('chainChanged', async (chainId) => {
+      correctNetwork = chainId === REQUIRED_CHAIN_ID;
+      if (correctNetwork) {
+        hideNetworkWarning();
+        showToastMsg('Connected to GenLayer Testnet Chain ✓');
+        if (walletAddress) initClient(walletAddress);
+      } else if (walletConnected) {
+        showNetworkWarning();
+      }
+    });
+
+    provider.on('accountsChanged', (accs) => {
+      if (accs.length === 0) {
+        disconnectWallet();
+      } else {
+        walletAddress = accs[0];
+        initClient(walletAddress);
+        const b = document.getElementById('connectBtn');
+        b.textContent = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
+      }
+    });
+
     console.log('Wallet connected:', walletAddress);
   } catch (e) {
-    console.error('Wallet connection failed:', e);
+    if (e.code === 4001) {
+      showToastMsg('Connection rejected. Please approve in your wallet.');
+    } else {
+      console.error('Wallet connection failed:', e);
+      showToastMsg('Failed to connect wallet. Please try again.');
+    }
   }
 };
 
@@ -158,6 +224,7 @@ function disconnectWallet() {
   walletAddress = null;
   correctNetwork = false;
   glClient = null;
+  provider = null;
 
   const btn = document.getElementById('connectBtn');
   btn.textContent = 'Connect Wallet';
@@ -167,31 +234,6 @@ function disconnectWallet() {
   hideNetworkWarning();
   initClient(null);
   showToastMsg('Wallet disconnected');
-}
-
-// Следим за сменой сети и аккаунта в MetaMask
-if (typeof window.ethereum !== 'undefined') {
-  window.ethereum.on('chainChanged', async (chainId) => {
-    correctNetwork = chainId === REQUIRED_CHAIN_ID;
-    if (correctNetwork) {
-      hideNetworkWarning();
-      showToastMsg('Connected to GenLayer Asimov Testnet ✓');
-      if (walletAddress) initClient(walletAddress);
-    } else if (walletConnected) {
-      showNetworkWarning();
-    }
-  });
-
-  window.ethereum.on('accountsChanged', (accounts) => {
-    if (accounts.length === 0) {
-      disconnectWallet();
-    } else if (walletConnected) {
-      walletAddress = accounts[0];
-      initClient(walletAddress);
-      const btn = document.getElementById('connectBtn');
-      btn.textContent = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
-    }
-  });
 }
 
 window.openFaucet = function () {
@@ -212,11 +254,11 @@ window.askOracle = async function () {
     return;
   }
 
-  // Неправильная сеть — блокируем и показываем баннер
+  // Неправильная сеть
   const ok = await checkNetwork();
   if (!ok) {
     showNetworkWarning();
-    showToastMsg('Switch to GenLayer Asimov Testnet first!');
+    showToastMsg('Switch to GenLayer Testnet Chain first!');
     return;
   }
 
@@ -293,7 +335,7 @@ async function getAnswer(question) {
   } catch (e) {
     console.warn('Contract call failed. Error:', e.message);
 
-    if (e.message?.includes('rejected') || e.message?.includes('denied') || e.code === 4001) {
+    if (e.code === 4001 || e.message?.includes('rejected') || e.message?.includes('denied')) {
       showToastMsg('Transaction rejected. No GEN was spent.');
       return '...';
     }
