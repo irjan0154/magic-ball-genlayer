@@ -6,7 +6,6 @@ const CONTRACT_ADDRESS = '0x87be8D5C2D45B8Eb7a8eFDC8e5829c97d05bA1c7';
 const GEN_PRICE = BigInt('1000000000000000000'); // 1 GEN in wei
 const REQUIRED_CHAIN_ID = '0x107D'; // 4221 decimal
 
-// Точные параметры сети — как в кране GenLayer
 const GENLAYER_NETWORK = {
   chainId: REQUIRED_CHAIN_ID,
   chainName: 'GenLayer Testnet Chain',
@@ -21,17 +20,28 @@ let walletAddress = null;
 let isAsking = false;
 let glClient = null;
 let correctNetwork = false;
-let provider = null; // универсальный EVM провайдер
+let provider = null;
 
-// ── DETECT ANY EVM WALLET ──
-// Работает с MetaMask, Rabby, OKX, Coinbase, Trust Wallet и любым EIP-1193 кошельком
-function getProvider() {
-  // window.ethereum — стандартный EIP-1193 провайдер
-  // поддерживается всеми современными EVM кошельками
-  if (typeof window.ethereum !== 'undefined') {
-    return window.ethereum;
-  }
-  return null;
+// ── WAIT FOR WALLET PROVIDER ──
+// Кошельки (MetaMask, Rabby, OKX...) иногда загружаются чуть позже страницы.
+// Ждём до 3 секунд пока window.ethereum появится.
+function waitForProvider(timeout = 3000) {
+  return new Promise((resolve) => {
+    if (typeof window.ethereum !== 'undefined') {
+      resolve(window.ethereum);
+      return;
+    }
+    const interval = setInterval(() => {
+      if (typeof window.ethereum !== 'undefined') {
+        clearInterval(interval);
+        resolve(window.ethereum);
+      }
+    }, 100);
+    setTimeout(() => {
+      clearInterval(interval);
+      resolve(null); // кошелёк так и не появился
+    }, timeout);
+  });
 }
 
 // ── INIT SDK CLIENT ──
@@ -40,7 +50,6 @@ function initClient(account) {
     chain: testnetAsimov,
     account: account || undefined,
   });
-  console.log('GenLayer client initialized');
 }
 
 // ── NETWORK CHECK ──
@@ -48,49 +57,74 @@ async function checkNetwork() {
   if (!provider) return false;
   try {
     const chainId = await provider.request({ method: 'eth_chainId' });
-    correctNetwork = chainId === REQUIRED_CHAIN_ID;
+    // Сравниваем оба формата — hex и decimal
+    correctNetwork = (
+      chainId === REQUIRED_CHAIN_ID ||
+      parseInt(chainId, 16) === 4221
+    );
     return correctNetwork;
   } catch (e) {
     return false;
   }
 }
 
-async function switchToGenLayer() {
-  if (!provider) return;
+// ── SWITCH NETWORK ──
+window.switchNetwork = async function () {
+  if (!provider) {
+    showToastMsg('Please connect your wallet first.');
+    return;
+  }
+
+  const btn = document.querySelector('#networkBanner button');
+  if (btn) {
+    btn.textContent = 'Switching...';
+    btn.disabled = true;
+  }
+
   try {
-    // Сначала пробуем переключиться (если сеть уже добавлена)
+    // Пробуем переключиться на уже добавленную сеть
     await provider.request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: REQUIRED_CHAIN_ID }],
     });
-    correctNetwork = true;
   } catch (err) {
-    // Код 4902 — сеть не добавлена, добавляем
+    // Сеть не добавлена — добавляем
     if (err.code === 4902 || err.message?.includes('Unrecognized chain')) {
       try {
         await provider.request({
           method: 'wallet_addEthereumChain',
           params: [GENLAYER_NETWORK],
         });
-        correctNetwork = true;
       } catch (addErr) {
-        console.error('Failed to add network:', addErr);
-        showToastMsg('Could not add network automatically. Please add it manually.');
+        showToastMsg('Could not add network. Please add GenLayer Testnet Chain manually.');
+        if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
+        return;
       }
-    } else {
-      console.error('Failed to switch network:', err);
+    } else if (err.code === 4001) {
+      showToastMsg('Network switch rejected.');
+      if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
+      return;
     }
   }
-}
 
-window.switchNetwork = async function () {
-  await switchToGenLayer();
-  const ok = await checkNetwork();
-  if (ok) {
-    hideNetworkWarning();
-    if (walletAddress) initClient(walletAddress);
-    showToastMsg('Connected to GenLayer Testnet Chain ✓');
-  }
+  // Принудительно проверяем сеть несколько раз после переключения
+  // (событие chainChanged не всегда приходит вовремя)
+  let attempts = 0;
+  const poll = setInterval(async () => {
+    attempts++;
+    const ok = await checkNetwork();
+    if (ok) {
+      clearInterval(poll);
+      hideNetworkWarning();
+      if (walletAddress) initClient(walletAddress);
+      showToastMsg('Connected to GenLayer Testnet Chain ✓');
+    } else if (attempts >= 20) {
+      // 20 попыток × 300ms = 6 секунд ожидания
+      clearInterval(poll);
+      if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
+      showToastMsg('Network switch timeout. Please switch manually in your wallet.');
+    }
+  }, 300);
 };
 
 // ── NETWORK WARNING BANNER ──
@@ -135,10 +169,7 @@ function showNetworkWarning() {
       letter-spacing: 0.06em;
       padding: 8px 22px;
       border-radius: 8px; cursor: pointer;
-      transition: all 0.2s ease;
-    " onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-      Switch Network
-    </button>
+    ">Switch Network</button>
   `;
   banner.style.display = 'block';
 }
@@ -155,11 +186,11 @@ window.connectWallet = async function () {
     return;
   }
 
-  // Ищем любой EVM кошелёк
-  provider = getProvider();
+  // Ждём появления провайдера (решает проблему "кошелёк не виден")
+  provider = await waitForProvider(3000);
 
   if (!provider) {
-    showToastMsg('No wallet detected. Please install MetaMask, Rabby, OKX or any EVM wallet.');
+    showToastMsg('No wallet found. Please install MetaMask, Rabby, OKX or any EVM wallet.');
     return;
   }
 
@@ -181,14 +212,15 @@ window.connectWallet = async function () {
 
     initClient(walletAddress);
 
-    // Проверяем сеть сразу после подключения
+    // Проверяем сеть
     const ok = await checkNetwork();
     if (!ok) showNetworkWarning();
 
-    // Слушаем смену сети и аккаунта
+    // Слушаем смену сети
     provider.on('chainChanged', async (chainId) => {
-      correctNetwork = chainId === REQUIRED_CHAIN_ID;
-      if (correctNetwork) {
+      const isOk = (chainId === REQUIRED_CHAIN_ID || parseInt(chainId, 16) === 4221);
+      correctNetwork = isOk;
+      if (isOk) {
         hideNetworkWarning();
         showToastMsg('Connected to GenLayer Testnet Chain ✓');
         if (walletAddress) initClient(walletAddress);
@@ -197,6 +229,7 @@ window.connectWallet = async function () {
       }
     });
 
+    // Слушаем смену аккаунта
     provider.on('accountsChanged', (accs) => {
       if (accs.length === 0) {
         disconnectWallet();
@@ -214,7 +247,7 @@ window.connectWallet = async function () {
       showToastMsg('Connection rejected. Please approve in your wallet.');
     } else {
       console.error('Wallet connection failed:', e);
-      showToastMsg('Failed to connect wallet. Please try again.');
+      showToastMsg('Failed to connect. Please try again.');
     }
   }
 };
@@ -248,13 +281,11 @@ window.askOracle = async function () {
   const q = input.value.trim();
   if (!q) { input.focus(); return; }
 
-  // Кошелёк не подключён
   if (!walletConnected) {
     showToastMsg('Connect your wallet to consult the oracle — 1 GEN per question');
     return;
   }
 
-  // Неправильная сеть
   const ok = await checkNetwork();
   if (!ok) {
     showNetworkWarning();
