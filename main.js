@@ -2,16 +2,24 @@ import { createClient } from 'genlayer-js';
 import { testnetAsimov } from 'genlayer-js/chains';
 import { TransactionStatus } from 'genlayer-js/types';
 
-// ── ЗАМЕНИ НА НОВЫЙ АДРЕС ПОСЛЕ ДЕПЛОЯ ──
 const CONTRACT_ADDRESS = '0x87be8D5C2D45B8Eb7a8eFDC8e5829c97d05bA1c7';
-
 const GEN_PRICE = BigInt('1000000000000000000'); // 1 GEN в wei
+const REQUIRED_CHAIN_ID = '0x107D'; // GenLayer Asimov = 4221
+
+const GENLAYER_NETWORK = {
+  chainId: REQUIRED_CHAIN_ID,
+  chainName: 'GenLayer Asimov Testnet',
+  nativeCurrency: { name: 'GEN', symbol: 'GEN', decimals: 18 },
+  rpcUrls: ['https://rpc.asimov.genlayer.com'],
+  blockExplorerUrls: ['https://studio.genlayer.com'],
+};
 
 // ── STATE ──
 let walletConnected = false;
 let walletAddress = null;
 let isAsking = false;
 let glClient = null;
+let correctNetwork = false;
 
 // ── INIT SDK CLIENT ──
 function initClient(account) {
@@ -22,19 +30,107 @@ function initClient(account) {
   console.log('GenLayer client initialized on testnetAsimov');
 }
 
+// ── NETWORK CHECK ──
+async function checkNetwork() {
+  if (typeof window.ethereum === 'undefined') return false;
+  const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+  correctNetwork = chainId === REQUIRED_CHAIN_ID;
+  return correctNetwork;
+}
+
+async function switchToGenLayer() {
+  try {
+    await window.ethereum.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: REQUIRED_CHAIN_ID }],
+    });
+    correctNetwork = true;
+    showToastMsg('Switched to GenLayer Asimov Testnet ✓');
+  } catch (err) {
+    if (err.code === 4902) {
+      try {
+        await window.ethereum.request({
+          method: 'wallet_addEthereumChain',
+          params: [GENLAYER_NETWORK],
+        });
+        correctNetwork = true;
+        showToastMsg('GenLayer Asimov Testnet added ✓');
+      } catch (addErr) {
+        showToastMsg('Failed to add network. Please add it manually in MetaMask.');
+      }
+    }
+  }
+}
+
+window.switchNetwork = async function () {
+  await switchToGenLayer();
+  const ok = await checkNetwork();
+  if (ok) {
+    hideNetworkWarning();
+    if (walletAddress) initClient(walletAddress);
+  }
+};
+
+// ── NETWORK WARNING BANNER ──
+function showNetworkWarning() {
+  let banner = document.getElementById('networkBanner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'networkBanner';
+    banner.style.cssText = `
+      position: fixed;
+      top: 70px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 8, 35, 0.97);
+      border: 1px solid rgba(239, 68, 68, 0.6);
+      border-radius: 12px;
+      padding: 14px 24px;
+      z-index: 500;
+      text-align: center;
+      font-family: 'Rajdhani', Arial, sans-serif;
+      color: #fca5a5;
+      font-size: 13px;
+      letter-spacing: 0.05em;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.8), 0 0 20px rgba(239,68,68,0.2);
+      max-width: 420px;
+      width: calc(100% - 40px);
+    `;
+    document.body.appendChild(banner);
+  }
+  banner.innerHTML = `
+    <div style="margin-bottom:8px;font-size:11px;letter-spacing:0.2em;color:#f87171;">⚠ WRONG NETWORK</div>
+    <div style="color:#e2c97e;margin-bottom:12px;">
+      Switch to <strong>GenLayer Asimov Testnet</strong> to use the oracle
+    </div>
+    <button onclick="window.switchNetwork()" style="
+      background: linear-gradient(135deg, #7c3aed, #a855f7);
+      border: none; color: white;
+      font-family: 'Rajdhani', Arial, sans-serif;
+      font-size: 13px; font-weight: 600;
+      letter-spacing: 0.06em;
+      padding: 8px 22px;
+      border-radius: 8px; cursor: pointer;
+    ">Switch Network</button>
+  `;
+  banner.style.display = 'block';
+}
+
+function hideNetworkWarning() {
+  const banner = document.getElementById('networkBanner');
+  if (banner) banner.style.display = 'none';
+}
+
 // ── WALLET: CONNECT / DISCONNECT ──
 window.connectWallet = async function () {
-  // Если уже подключён — дисконнект
   if (walletConnected) {
     disconnectWallet();
     return;
   }
-
   if (typeof window.ethereum === 'undefined') {
     showToastMsg('Please install MetaMask');
     return;
   }
-
   try {
     const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
     walletAddress = accounts[0];
@@ -46,6 +142,11 @@ window.connectWallet = async function () {
     btn.title = 'Click to disconnect';
 
     initClient(walletAddress);
+
+    // Проверяем сеть сразу после подключения
+    const ok = await checkNetwork();
+    if (!ok) showNetworkWarning();
+
     console.log('Wallet connected:', walletAddress);
   } catch (e) {
     console.error('Wallet connection failed:', e);
@@ -55,6 +156,7 @@ window.connectWallet = async function () {
 function disconnectWallet() {
   walletConnected = false;
   walletAddress = null;
+  correctNetwork = false;
   glClient = null;
 
   const btn = document.getElementById('connectBtn');
@@ -62,14 +164,24 @@ function disconnectWallet() {
   btn.classList.remove('connected');
   btn.title = '';
 
-  // Re-init read-only client
+  hideNetworkWarning();
   initClient(null);
   showToastMsg('Wallet disconnected');
-  console.log('Wallet disconnected');
 }
 
-// Следим за сменой аккаунта в MetaMask
+// Следим за сменой сети и аккаунта в MetaMask
 if (typeof window.ethereum !== 'undefined') {
+  window.ethereum.on('chainChanged', async (chainId) => {
+    correctNetwork = chainId === REQUIRED_CHAIN_ID;
+    if (correctNetwork) {
+      hideNetworkWarning();
+      showToastMsg('Connected to GenLayer Asimov Testnet ✓');
+      if (walletAddress) initClient(walletAddress);
+    } else if (walletConnected) {
+      showNetworkWarning();
+    }
+  });
+
   window.ethereum.on('accountsChanged', (accounts) => {
     if (accounts.length === 0) {
       disconnectWallet();
@@ -94,9 +206,17 @@ window.askOracle = async function () {
   const q = input.value.trim();
   if (!q) { input.focus(); return; }
 
-  // Если кошелёк не подключён — показываем сообщение
+  // Кошелёк не подключён
   if (!walletConnected) {
     showToastMsg('Connect your wallet to consult the oracle — 1 GEN per question');
+    return;
+  }
+
+  // Неправильная сеть — блокируем и показываем баннер
+  const ok = await checkNetwork();
+  if (!ok) {
+    showNetworkWarning();
+    showToastMsg('Switch to GenLayer Asimov Testnet first!');
     return;
   }
 
@@ -135,26 +255,24 @@ window.handleOrbClick = function () {
   else document.getElementById('questionInput').focus();
 };
 
-// ── GET ANSWER FROM BLOCKCHAIN (с оплатой 1 GEN) ──
+// ── GET ANSWER FROM BLOCKCHAIN ──
 async function getAnswer(question) {
   if (!walletConnected || !glClient) {
     showToastMsg('Connect your wallet first!');
-    return localAnswer();
+    return '...';
   }
 
   try {
     console.log('Sending question to GenLayer contract with 1 GEN payment...');
 
-    // Вызов контракта с оплатой 1 GEN (value передаётся в wei)
     const txHash = await glClient.writeContract({
       address: CONTRACT_ADDRESS,
       functionName: 'ask_oracle',
       args: [question],
-      value: GEN_PRICE,   // ← 1 GEN оплата
+      value: GEN_PRICE,
     });
     console.log('Transaction sent:', txHash);
 
-    // Ждём финализации (валидаторы достигают консенсуса)
     const receipt = await glClient.waitForTransactionReceipt({
       hash: txHash,
       status: TransactionStatus.FINALIZED,
@@ -162,7 +280,6 @@ async function getAnswer(question) {
     });
     console.log('Transaction finalized:', receipt);
 
-    // Читаем ответ из контракта
     const result = await glClient.readContract({
       address: CONTRACT_ADDRESS,
       functionName: 'get_answer',
@@ -176,13 +293,10 @@ async function getAnswer(question) {
   } catch (e) {
     console.warn('Contract call failed. Error:', e.message);
 
-    // Если пользователь отклонил транзакцию в MetaMask
     if (e.message?.includes('rejected') || e.message?.includes('denied') || e.code === 4001) {
       showToastMsg('Transaction rejected. No GEN was spent.');
       return '...';
     }
-
-    // Если недостаточно средств
     if (e.message?.includes('insufficient')) {
       showToastMsg('Insufficient GEN balance. Get tokens from the faucet!');
       return '...';
@@ -195,13 +309,13 @@ async function getAnswer(question) {
 function localAnswer() {
   const answers = [
     'Validators say yes!', 'Big brain move!', 'Yes! Consensus reached!',
-    'Validators approve!', 'Epic win!', 'Infinite loop of yes',
-    'Yes! LFG!', 'The network whispers yes', 'Blockchain agrees', 'Heck yeah!',
+    'Validators approve!', 'Epic win!', 'Yes! LFG!',
+    'The network whispers yes', 'Blockchain agrees', 'Heck yeah!',
     'Error 404: Answer not found', 'Maybe… or maybe not', 'Meh… who knows',
-    'Hold up, think again', 'IDK fam, maybe', 'Validators are unsure',
-    'Validators say NO!', 'The test fails', '0% chance, 100% regret',
-    "That's a fail", 'Nah, not today', 'Sadge', 'Lmao nope',
-    'Blockchain magic guides you', 'Nodes will help you', 'Oracle nods',
+    'Validators are unsure', 'Ask the oracle later', 'Check the nodes',
+    'Validators say NO!', 'The test fails', "That's a fail",
+    'Nah, not today', 'Sadge', 'Blockchain magic guides you',
+    'Nodes will help you', 'Oracle nods', 'GenLayer knows the answer',
   ];
   return answers[Math.floor(Math.random() * answers.length)];
 }
