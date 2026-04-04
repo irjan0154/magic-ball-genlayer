@@ -2,21 +2,10 @@ import { createClient } from 'genlayer-js';
 import { testnetAsimov } from 'genlayer-js/chains';
 import { TransactionStatus } from 'genlayer-js/types';
 
-const CONTRACT_ADDRESS = '0x5745c45c244786Fb41201768302FE8f6e0Db25b2';
+// ── ЗАМЕНИ НА НОВЫЙ АДРЕС ПОСЛЕ ДЕПЛОЯ ──
+const CONTRACT_ADDRESS = '0x87be8D5C2D45B8Eb7a8eFDC8e5829c97d05bA1c7';
 
-const ANSWERS = [
-  'Validators say yes!', 'Big brain move!', 'Yes! Consensus reached!',
-  'Validators approve!', 'Epic win!', 'Infinite loop of yes',
-  'Yes! LFG!', 'The network whispers yes', 'Blockchain agrees', 'Heck yeah!',
-  'Error 404: Answer not found', 'Maybe… or maybe not', 'Meh… who knows',
-  'Hold up, think again', 'IDK fam, maybe', 'Meh… who cares',
-  'Validators are unsure', 'Ask the oracle later', 'Check the nodes', 'Who even knows lol',
-  'Validators say NO!', 'The test fails', '0% chance, 100% regret',
-  "That's a fail", 'Nah, not today', 'Sadge', 'Lmao nope',
-  'Cringe alert!', 'Merge rejected', 'RIP your hopes',
-  'Blockchain magic guides you', 'Nodes will help you', 'Validators smile',
-  'Oracle nods', 'GenLayer knows the answer'
-];
+const GEN_PRICE = BigInt('1000000000000000000'); // 1 GEN в wei
 
 // ── STATE ──
 let walletConnected = false;
@@ -24,7 +13,7 @@ let walletAddress = null;
 let isAsking = false;
 let glClient = null;
 
-// ── INIT SDK CLIENT (read-only, no account needed) ──
+// ── INIT SDK CLIENT ──
 function initClient(account) {
   glClient = createClient({
     chain: testnetAsimov,
@@ -33,13 +22,19 @@ function initClient(account) {
   console.log('GenLayer client initialized on testnetAsimov');
 }
 
-// ── WALLET ──
+// ── WALLET: CONNECT / DISCONNECT ──
 window.connectWallet = async function () {
-  if (walletConnected) return;
+  // Если уже подключён — дисконнект
+  if (walletConnected) {
+    disconnectWallet();
+    return;
+  }
+
   if (typeof window.ethereum === 'undefined') {
     showToastMsg('Please install MetaMask');
     return;
   }
+
   try {
     const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
     walletAddress = accounts[0];
@@ -48,14 +43,44 @@ window.connectWallet = async function () {
     const btn = document.getElementById('connectBtn');
     btn.textContent = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
     btn.classList.add('connected');
+    btn.title = 'Click to disconnect';
 
-    // Re-init client WITH the connected account
     initClient(walletAddress);
     console.log('Wallet connected:', walletAddress);
   } catch (e) {
     console.error('Wallet connection failed:', e);
   }
 };
+
+function disconnectWallet() {
+  walletConnected = false;
+  walletAddress = null;
+  glClient = null;
+
+  const btn = document.getElementById('connectBtn');
+  btn.textContent = 'Connect Wallet';
+  btn.classList.remove('connected');
+  btn.title = '';
+
+  // Re-init read-only client
+  initClient(null);
+  showToastMsg('Wallet disconnected');
+  console.log('Wallet disconnected');
+}
+
+// Следим за сменой аккаунта в MetaMask
+if (typeof window.ethereum !== 'undefined') {
+  window.ethereum.on('accountsChanged', (accounts) => {
+    if (accounts.length === 0) {
+      disconnectWallet();
+    } else if (walletConnected) {
+      walletAddress = accounts[0];
+      initClient(walletAddress);
+      const btn = document.getElementById('connectBtn');
+      btn.textContent = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
+    }
+  });
+}
 
 window.openFaucet = function () {
   window.open('https://testnet-faucet.genlayer.foundation/', '_blank');
@@ -64,9 +89,16 @@ window.openFaucet = function () {
 // ── MAIN ORACLE FUNCTION ──
 window.askOracle = async function () {
   if (isAsking) return;
+
   const input = document.getElementById('questionInput');
   const q = input.value.trim();
   if (!q) { input.focus(); return; }
+
+  // Если кошелёк не подключён — показываем сообщение
+  if (!walletConnected) {
+    showToastMsg('Connect your wallet to consult the oracle — 1 GEN per question');
+    return;
+  }
 
   isAsking = true;
   document.getElementById('sendBtn').disabled = true;
@@ -95,31 +127,34 @@ window.askOracle = async function () {
 
 window.handleOrbClick = function () {
   const q = document.getElementById('questionInput').value.trim();
+  if (!walletConnected) {
+    showToastMsg('Connect your wallet to consult the oracle — 1 GEN per question');
+    return;
+  }
   if (q && !isAsking) window.askOracle();
   else document.getElementById('questionInput').focus();
 };
 
-// ── GET ANSWER FROM BLOCKCHAIN ──
+// ── GET ANSWER FROM BLOCKCHAIN (с оплатой 1 GEN) ──
 async function getAnswer(question) {
-  // Must have wallet connected to write to blockchain
   if (!walletConnected || !glClient) {
-    showToastMsg('Connect your MetaMask wallet first!');
-    await sleep(1000);
+    showToastMsg('Connect your wallet first!');
     return localAnswer();
   }
 
   try {
-    console.log('Sending question to GenLayer contract...');
+    console.log('Sending question to GenLayer contract with 1 GEN payment...');
 
-    // 1. Send write transaction — ask_oracle
+    // Вызов контракта с оплатой 1 GEN (value передаётся в wei)
     const txHash = await glClient.writeContract({
       address: CONTRACT_ADDRESS,
       functionName: 'ask_oracle',
       args: [question],
+      value: GEN_PRICE,   // ← 1 GEN оплата
     });
     console.log('Transaction sent:', txHash);
 
-    // 2. Wait for FINALIZED status (validators reach consensus)
+    // Ждём финализации (валидаторы достигают консенсуса)
     const receipt = await glClient.waitForTransactionReceipt({
       hash: txHash,
       status: TransactionStatus.FINALIZED,
@@ -127,7 +162,7 @@ async function getAnswer(question) {
     });
     console.log('Transaction finalized:', receipt);
 
-    // 3. Read the answer from contract state
+    // Читаем ответ из контракта
     const result = await glClient.readContract({
       address: CONTRACT_ADDRESS,
       functionName: 'get_answer',
@@ -139,13 +174,36 @@ async function getAnswer(question) {
     return localAnswer();
 
   } catch (e) {
-    console.warn('Contract call failed, using local answer. Error:', e.message);
+    console.warn('Contract call failed. Error:', e.message);
+
+    // Если пользователь отклонил транзакцию в MetaMask
+    if (e.message?.includes('rejected') || e.message?.includes('denied') || e.code === 4001) {
+      showToastMsg('Transaction rejected. No GEN was spent.');
+      return '...';
+    }
+
+    // Если недостаточно средств
+    if (e.message?.includes('insufficient')) {
+      showToastMsg('Insufficient GEN balance. Get tokens from the faucet!');
+      return '...';
+    }
+
     return localAnswer();
   }
 }
 
 function localAnswer() {
-  return ANSWERS[Math.floor(Math.random() * ANSWERS.length)];
+  const answers = [
+    'Validators say yes!', 'Big brain move!', 'Yes! Consensus reached!',
+    'Validators approve!', 'Epic win!', 'Infinite loop of yes',
+    'Yes! LFG!', 'The network whispers yes', 'Blockchain agrees', 'Heck yeah!',
+    'Error 404: Answer not found', 'Maybe… or maybe not', 'Meh… who knows',
+    'Hold up, think again', 'IDK fam, maybe', 'Validators are unsure',
+    'Validators say NO!', 'The test fails', '0% chance, 100% regret',
+    "That's a fail", 'Nah, not today', 'Sadge', 'Lmao nope',
+    'Blockchain magic guides you', 'Nodes will help you', 'Oracle nods',
+  ];
+  return answers[Math.floor(Math.random() * answers.length)];
 }
 
 // ── AUDIO ──
@@ -187,14 +245,12 @@ function playShakeSound() {
 }
 
 function playRevealSound() {
-  // Use embedded MP3 if available
   if (window.REVEAL_SOUND_B64) {
     const audio = new Audio(window.REVEAL_SOUND_B64);
     audio.volume = 1.0;
     audio.play().catch(e => console.warn('Audio play failed:', e));
     return;
   }
-  // Fallback: synthesized sparkles
   const ctx = getAudioCtx();
   const now = ctx.currentTime;
   const sparkles = [
@@ -295,7 +351,6 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── BOOT ──
 document.addEventListener('DOMContentLoaded', () => {
-  // Init read-only client immediately
   initClient(null);
 
   document.getElementById('validatorsStatus').addEventListener('transitionend', function () {
@@ -303,7 +358,6 @@ document.addEventListener('DOMContentLoaded', () => {
       [1, 2, 3, 4, 5].forEach(i => document.getElementById('vd' + i).classList.remove('active'));
   });
 
-  // Enter key on input
   document.getElementById('questionInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') window.askOracle();
   });
