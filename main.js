@@ -1,7 +1,7 @@
 import { createClient } from 'genlayer-js';
 
 const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT || '0x87be8D5C2D45B8Eb7a8eFDC8e5829c97d05bA1c7';
-const REQUIRED_CHAIN_ID = '0x107d'; // 4221
+const REQUIRED_CHAIN_ID = '0x107d';
 const GEN_PRICE = BigInt(import.meta.env.VITE_PRICE || '1000000000000000000');
 
 let client;
@@ -21,10 +21,9 @@ async function waitForProvider(timeout = 10000) {
 async function connectWallet() {
   try {
     const ethereum = await waitForProvider();
-
     const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
-    account = accounts[0];
 
+    account = accounts[0];
     client = createClient({ provider: ethereum });
 
     listenWalletEvents(ethereum);
@@ -88,7 +87,6 @@ async function checkBalance() {
     method: 'eth_getBalance',
     params: [account, 'latest']
   });
-
   return BigInt(balance);
 }
 
@@ -129,10 +127,7 @@ async function askQuestion(question) {
     setStatus('Waiting confirmation...');
 
     const receipt = await withTimeout(tx.wait(), 60000);
-
-    if (receipt.status !== 1) {
-      throw new Error('Transaction failed');
-    }
+    if (receipt.status !== 1) throw new Error('Transaction failed');
 
     setStatus('Waiting for oracle...');
 
@@ -144,7 +139,6 @@ async function askQuestion(question) {
       args: [account]
     });
 
-    cacheAnswer(question, result);
     showAnswer(result);
     setStatus('Done');
 
@@ -161,54 +155,48 @@ async function askQuestion(question) {
   }
 }
 
-// ---------- CACHE ----------
-function cacheAnswer(q, a) {
-  const data = JSON.parse(localStorage.getItem('history') || '[]');
-  data.unshift({ q, a, ts: Date.now() });
-  localStorage.setItem('history', JSON.stringify(data.slice(0, 10)));
-}
-
 // ---------- UI ----------
 function updateUI() {
   const el = document.getElementById('account');
-  if (el) el.textContent = account ? account.slice(0,6)+'...'+account.slice(-4) : 'Not connected';
+  if (el) {
+    el.textContent = account
+      ? account.slice(0, 6) + '...' + account.slice(-4)
+      : 'Not connected';
+  }
 }
 
 function setStatus(text) {
-  const el = document.getElementById('status');
-  if (el) el.textContent = text;
+  document.getElementById('status').textContent = text;
 }
 
 function showAnswer(answer) {
-  const el = document.getElementById('answer');
-  if (el) el.textContent = answer;
+  document.getElementById('answer').textContent = answer;
 }
 
 function disableAskButton(state) {
-  const btn = document.getElementById('askBtn');
-  if (btn) btn.disabled = state;
+  document.getElementById('askBtn').disabled = state;
 }
 
 function showSwitchNetworkButton() {
-  const btn = document.getElementById('switchNetworkBtn');
-  if (btn) btn.style.display = 'block';
+  document.getElementById('switchNetworkBtn').style.display = 'block';
 }
 
 // ---------- EVENTS ----------
-document.getElementById('connectBtn')?.addEventListener('click', connectWallet);
+window.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('connectBtn')?.addEventListener('click', connectWallet);
 
-document.getElementById('switchNetworkBtn')?.addEventListener('click', async () => {
-  try {
-    await switchNetwork();
-    setStatus('Network switched');
-  } catch (e) {
-    setStatus('Switch failed');
-  }
-});
+  document.getElementById('switchNetworkBtn')?.addEventListener('click', async () => {
+    try {
+      await switchNetwork();
+      setStatus('Network switched');
+    } catch {
+      setStatus('Switch failed');
+    }
+  });
 
-document.getElementById('askForm')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const input = document.getElementById('question');
-  const question = input.value.trim();
-  await askQuestion(question);
+  document.getElementById('askForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const question = document.getElementById('question').value.trim();
+    await askQuestion(question);
+  });
 });
