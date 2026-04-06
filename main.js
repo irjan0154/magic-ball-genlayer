@@ -23,11 +23,20 @@ let glClient = null;
 let provider = null;
 
 // ── WAIT FOR WALLET ──
+// OKX хранит провайдер в window.okxwallet, остальные — в window.ethereum
+function detectProvider() {
+  if (typeof window.okxwallet !== 'undefined') return window.okxwallet;
+  if (typeof window.ethereum !== 'undefined') return window.ethereum;
+  return null;
+}
+
 function waitForProvider(timeout = 3000) {
   return new Promise((resolve) => {
-    if (typeof window.ethereum !== 'undefined') { resolve(window.ethereum); return; }
+    const found = detectProvider();
+    if (found) { resolve(found); return; }
     const iv = setInterval(() => {
-      if (typeof window.ethereum !== 'undefined') { clearInterval(iv); resolve(window.ethereum); }
+      const p = detectProvider();
+      if (p) { clearInterval(iv); resolve(p); }
     }, 100);
     setTimeout(() => { clearInterval(iv); resolve(null); }, timeout);
   });
@@ -68,7 +77,7 @@ window.switchNetwork = async function () {
       params: [{ chainId: REQUIRED_CHAIN_HEX }],
     });
   } catch (err) {
-    if (err.code === 4902 || err.message?.includes('Unrecognized chain')) {
+    if (err.code === 4902 || err.message?.includes('Unrecognized chain') || err.message?.includes('wallet_addEthereumChain')) {
       try {
         await provider.request({
           method: 'wallet_addEthereumChain',
@@ -84,23 +93,32 @@ window.switchNetwork = async function () {
       if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
       return;
     }
+    // Для OKX: ошибка может прилететь даже при успешной смене, продолжаем поллинг
   }
 
-  // Опрашиваем каждые 300мс пока сеть не сменится
+  // Опрашиваем каждые 500мс пока сеть не сменится (60 попыток = 30 секунд)
   let attempts = 0;
   const poll = setInterval(async () => {
     attempts++;
-    if (await isOnCorrectNetwork()) {
+    // Перечитываем провайдер — OKX иногда меняет объект после смены сети
+    const freshProvider = detectProvider();
+    if (freshProvider) provider = freshProvider;
+
+    const chainHex = await provider.request({ method: 'eth_chainId' }).catch(() => null);
+    const chainId = chainHex ? parseInt(chainHex, 16) : null;
+
+    if (chainId === REQUIRED_CHAIN_ID) {
       clearInterval(poll);
       hideNetworkWarning();
       if (walletAddress) initClient(walletAddress);
       showToastMsg('✓ Connected to GenLayer Testnet Chain');
-    } else if (attempts >= 30) {
+      if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
+    } else if (attempts >= 60) {
       clearInterval(poll);
       if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
-      showToastMsg('Please switch to GenLayer Testnet Chain manually in your wallet.');
+      showToastMsg('Network not switched. Please do it manually in your wallet.');
     }
-  }, 300);
+  }, 500);
 };
 
 // ── BANNERS ──
@@ -159,13 +177,23 @@ window.connectWallet = async function () {
     btn.classList.add('connected');
     btn.title = 'Click to disconnect';
 
-    initClient(walletAddress);
-
-    // Проверка сети сразу при подключении
-    if (!await isOnCorrectNetwork()) showNetworkWarning();
+    // Инициализируем клиент только если сеть правильная
+    const onCorrect = await isOnCorrectNetwork();
+    if (onCorrect) {
+      initClient(walletAddress);
+    } else {
+      showNetworkWarning();
+    }
 
     provider.on('chainChanged', async () => {
-      if (await isOnCorrectNetwork()) {
+      // Перечитываем провайдер — OKX может обновить объект
+      const freshProvider = detectProvider();
+      if (freshProvider) provider = freshProvider;
+
+      const chainHex = await provider.request({ method: 'eth_chainId' }).catch(() => null);
+      const chainId = chainHex ? parseInt(chainHex, 16) : null;
+
+      if (chainId === REQUIRED_CHAIN_ID) {
         hideNetworkWarning();
         if (walletAddress) initClient(walletAddress);
         showToastMsg('✓ GenLayer Testnet Chain connected');
