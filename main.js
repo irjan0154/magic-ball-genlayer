@@ -416,4 +416,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('questionInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') window.askOracle();
   });
+  document.getElementById('sendBtn').addEventListener('click', () => {
+    window.askOracle();
+  });
 });
