@@ -293,11 +293,18 @@ async function getAnswer(question) {
     });
     console.log('TX sent:', txHash);
 
-    await glClient.waitForTransactionReceipt({
+    const receipt = await glClient.waitForTransactionReceipt({
       hash: txHash,
       status: TransactionStatus.FINALIZED,
       fullTransaction: false,
     });
+
+    // Проверяем что транзакция не зафейлилась
+    if (receipt && receipt.isSuccess === false) {
+      console.warn('TX finalized but reverted');
+      showToastMsg('Transaction reverted on-chain. Check your GEN balance and contract.');
+      return '...';
+    }
 
     const result = await glClient.readContract({
       address: CONTRACT_ADDRESS,
@@ -307,7 +314,9 @@ async function getAnswer(question) {
     console.log('Answer:', result);
 
     if (result?.trim()) return result;
-    return localAnswer();
+
+    showToastMsg('No answer from oracle yet. Try again in a moment.');
+    return '...';
 
   } catch (e) {
     console.warn('TX error:', e.message);
@@ -319,22 +328,14 @@ async function getAnswer(question) {
       showToastMsg('Not enough GEN. Get tokens from the faucet!');
       return '...';
     }
-    return localAnswer();
+    if (e.message?.includes('reverted') || e.message?.includes('execution reverted')) {
+      showToastMsg('Transaction reverted. Check your GEN balance and try again.');
+      return '...';
+    }
+    console.error('Unexpected error:', e);
+    showToastMsg('Something went wrong. See console for details.');
+    return '...';
   }
-}
-
-function localAnswer() {
-  const a = [
-    'Validators say yes!','Big brain move!','Yes! Consensus reached!',
-    'Validators approve!','Epic win!','Yes! LFG!',
-    'The network whispers yes','Blockchain agrees','Heck yeah!',
-    'Error 404: Answer not found','Maybe… or maybe not','Meh… who knows',
-    'Validators are unsure','Ask the oracle later','Check the nodes',
-    'Validators say NO!','The test fails',"That's a fail",
-    'Nah, not today','Sadge','Blockchain magic guides you',
-    'Nodes will help you','Oracle nods','GenLayer knows the answer',
-  ];
-  return a[Math.floor(Math.random() * a.length)];
 }
 
 // ── AUDIO ──
