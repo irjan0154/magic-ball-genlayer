@@ -2,8 +2,9 @@ import { createClient } from 'genlayer-js';
 import { testnetAsimov } from 'genlayer-js/chains';
 import { TransactionStatus } from 'genlayer-js/types';
 
-const CONTRACT_ADDRESS = '0x87be8D5C2D45B8Eb7a8eFDC8e5829c97d05bA1c7';
-const GEN_PRICE = BigInt('1000000000000000000'); // 1 GEN in wei
+// ── CONSTANTS ──
+const CONTRACT_ADDRESS  = '0x87be8D5C2D45B8Eb7a8eFDC8e5829c97d05bA1c7';
+const GEN_PRICE         = BigInt('1000000000000000000');
 const REQUIRED_CHAIN_ID = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
 
@@ -17,32 +18,37 @@ const GENLAYER_NETWORK = {
 
 // ── STATE ──
 let walletConnected = false;
-let walletAddress = null;
-let isAsking = false;
-let glClient = null;
-let provider = null;
+let walletAddress   = null;
+let isAsking        = false;
+let glClient        = null;
+let provider        = null;
 
-// ── WAIT FOR WALLET ──
-// OKX хранит провайдер в window.okxwallet, остальные — в window.ethereum
+// ── WALLET DETECTION ──
+// MetaMask/Rabby → window.ethereum
+// OKX Wallet     → window.okxwallet
+// Несколько расширений → window.ethereum.providers[]
 function detectProvider() {
   if (typeof window.okxwallet !== 'undefined') return window.okxwallet;
+  if (window.ethereum?.providers?.length) return window.ethereum.providers[0];
   if (typeof window.ethereum !== 'undefined') return window.ethereum;
   return null;
 }
 
-function waitForProvider(timeout = 3000) {
+function waitForProvider(timeoutMs = 4000) {
   return new Promise((resolve) => {
     const found = detectProvider();
     if (found) { resolve(found); return; }
+    let elapsed = 0;
     const iv = setInterval(() => {
       const p = detectProvider();
-      if (p) { clearInterval(iv); resolve(p); }
+      if (p) { clearInterval(iv); resolve(p); return; }
+      elapsed += 100;
+      if (elapsed >= timeoutMs) { clearInterval(iv); resolve(null); }
     }, 100);
-    setTimeout(() => { clearInterval(iv); resolve(null); }, timeout);
   });
 }
 
-// ── INIT READ CLIENT (только для чтения ответа) ──
+// ── GENLAYER CLIENT ──
 function initClient(account) {
   glClient = createClient({
     chain: testnetAsimov,
@@ -50,7 +56,7 @@ function initClient(account) {
   });
 }
 
-// ── NETWORK CHECK — читаем прямо из провайдера ──
+// ── NETWORK HELPERS ──
 async function getCurrentChainId() {
   if (!provider) return null;
   try {
@@ -60,16 +66,14 @@ async function getCurrentChainId() {
 }
 
 async function isOnCorrectNetwork() {
-  const id = await getCurrentChainId();
-  return id === REQUIRED_CHAIN_ID;
+  return (await getCurrentChainId()) === REQUIRED_CHAIN_ID;
 }
 
 // ── SWITCH NETWORK ──
 window.switchNetwork = async function () {
   if (!provider) { showToastMsg('Connect your wallet first.'); return; }
-
   const btn = document.querySelector('#networkBanner button');
-  if (btn) { btn.textContent = 'Switching...'; btn.disabled = true; }
+  if (btn) { btn.textContent = 'Switching…'; btn.disabled = true; }
 
   try {
     await provider.request({
@@ -77,91 +81,76 @@ window.switchNetwork = async function () {
       params: [{ chainId: REQUIRED_CHAIN_HEX }],
     });
   } catch (err) {
-    if (err.code === 4902 || err.message?.includes('Unrecognized chain') || err.message?.includes('wallet_addEthereumChain')) {
+    if (err.code === 4902 || err.message?.includes('Unrecognized chain')) {
       try {
-        await provider.request({
-          method: 'wallet_addEthereumChain',
-          params: [GENLAYER_NETWORK],
-        });
+        await provider.request({ method: 'wallet_addEthereumChain', params: [GENLAYER_NETWORK] });
       } catch {
         showToastMsg('Please add GenLayer Testnet Chain manually in your wallet.');
         if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
         return;
       }
     } else if (err.code === 4001) {
-      showToastMsg('Rejected. Please switch to GenLayer Testnet Chain manually.');
+      showToastMsg('Rejected. Please switch the network manually in your wallet.');
       if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
       return;
     }
-    // Для OKX: ошибка может прилететь даже при успешной смене, продолжаем поллинг
   }
 
-  // Опрашиваем каждые 500мс пока сеть не сменится (60 попыток = 30 секунд)
   let attempts = 0;
   const poll = setInterval(async () => {
     attempts++;
-    // Перечитываем провайдер — OKX иногда меняет объект после смены сети
-    const freshProvider = detectProvider();
-    if (freshProvider) provider = freshProvider;
-
-    const chainHex = await provider.request({ method: 'eth_chainId' }).catch(() => null);
-    const chainId = chainHex ? parseInt(chainHex, 16) : null;
-
-    if (chainId === REQUIRED_CHAIN_ID) {
+    const fp = detectProvider();
+    if (fp) provider = fp;
+    const id = await getCurrentChainId();
+    if (id === REQUIRED_CHAIN_ID) {
       clearInterval(poll);
-      hideNetworkWarning();
-      if (walletAddress) initClient(walletAddress);
-      showToastMsg('✓ Connected to GenLayer Testnet Chain');
+      hideNetworkBanner();
+      initClient(walletAddress);
+      showToastMsg('✓ Switched to GenLayer Testnet Chain');
       if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
     } else if (attempts >= 60) {
       clearInterval(poll);
-      if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
       showToastMsg('Network not switched. Please do it manually in your wallet.');
+      if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
     }
   }, 500);
 };
 
-// ── BANNERS ──
-function showNetworkWarning() {
+// ── NETWORK BANNER ──
+function showNetworkBanner() {
   let b = document.getElementById('networkBanner');
   if (!b) {
     b = document.createElement('div');
     b.id = 'networkBanner';
-    b.style.cssText = `
-      position:fixed;top:70px;left:50%;transform:translateX(-50%);
-      background:rgba(15,8,35,.97);border:1px solid rgba(239,68,68,.6);
-      border-radius:12px;padding:14px 24px;z-index:500;text-align:center;
-      font-family:'Rajdhani',Arial,sans-serif;font-size:13px;
-      box-shadow:0 8px 32px rgba(0,0,0,.8);
-      max-width:420px;width:calc(100% - 40px);`;
+    b.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:500;' +
+      'background:rgba(15,8,35,.97);border:1px solid rgba(239,68,68,.6);border-radius:12px;' +
+      'padding:16px 24px;text-align:center;font-family:Rajdhani,Arial,sans-serif;font-size:13px;' +
+      'box-shadow:0 8px 32px rgba(0,0,0,.8);max-width:420px;width:calc(100% - 40px);';
     document.body.appendChild(b);
   }
   b.innerHTML = `
-    <div style="margin-bottom:8px;font-size:11px;letter-spacing:.2em;color:#f87171;">⚠ WRONG NETWORK</div>
-    <div style="color:#e2c97e;margin-bottom:12px;">
-      Switch to <strong>GenLayer Testnet Chain</strong> to use the oracle
-    </div>
+    <div style="font-size:11px;letter-spacing:.2em;color:#f87171;margin-bottom:6px;">⚠ WRONG NETWORK</div>
+    <div style="color:#e2c97e;margin-bottom:12px;">Switch to <strong>GenLayer Testnet Chain</strong> (Chain ID 4221)</div>
     <button onclick="window.switchNetwork()" style="
-      background:linear-gradient(135deg,#7c3aed,#a855f7);border:none;color:white;
-      font-family:'Rajdhani',Arial,sans-serif;font-size:13px;font-weight:600;
+      background:linear-gradient(135deg,#7c3aed,#a855f7);border:none;color:#fff;
+      font-family:Rajdhani,Arial,sans-serif;font-size:13px;font-weight:600;
       letter-spacing:.06em;padding:8px 22px;border-radius:8px;cursor:pointer;">
-      Switch Network
-    </button>`;
+      Switch Network</button>`;
   b.style.display = 'block';
 }
 
-function hideNetworkWarning() {
+function hideNetworkBanner() {
   const b = document.getElementById('networkBanner');
   if (b) b.style.display = 'none';
 }
 
-// ── WALLET: CONNECT / DISCONNECT ──
+// ── CONNECT / DISCONNECT ──
 window.connectWallet = async function () {
   if (walletConnected) { disconnectWallet(); return; }
 
-  provider = await waitForProvider(3000);
+  provider = await waitForProvider(4000);
   if (!provider) {
-    showToastMsg('No wallet found. Please install MetaMask, Rabby, OKX or any EVM wallet.');
+    showToastMsg('No wallet found. Install MetaMask, Rabby or OKX Wallet.');
     return;
   }
 
@@ -169,36 +158,33 @@ window.connectWallet = async function () {
     const accounts = await provider.request({ method: 'eth_requestAccounts' });
     if (!accounts?.length) { showToastMsg('No accounts found. Unlock your wallet.'); return; }
 
-    walletAddress = accounts[0];
+    walletAddress   = accounts[0];
     walletConnected = true;
 
     const btn = document.getElementById('connectBtn');
-    btn.textContent = walletAddress.slice(0,6) + '...' + walletAddress.slice(-4);
+    btn.textContent = walletAddress.slice(0,6) + '…' + walletAddress.slice(-4);
     btn.classList.add('connected');
     btn.title = 'Click to disconnect';
 
-    // Инициализируем клиент только если сеть правильная
-    const onCorrect = await isOnCorrectNetwork();
-    if (onCorrect) {
+    if (await isOnCorrectNetwork()) {
       initClient(walletAddress);
+      hideNetworkBanner();
     } else {
-      showNetworkWarning();
+      glClient = null;
+      showNetworkBanner();
     }
 
     provider.on('chainChanged', async () => {
-      // Перечитываем провайдер — OKX может обновить объект
-      const freshProvider = detectProvider();
-      if (freshProvider) provider = freshProvider;
-
-      const chainHex = await provider.request({ method: 'eth_chainId' }).catch(() => null);
-      const chainId = chainHex ? parseInt(chainHex, 16) : null;
-
-      if (chainId === REQUIRED_CHAIN_ID) {
-        hideNetworkWarning();
-        if (walletAddress) initClient(walletAddress);
+      const fp = detectProvider();
+      if (fp) provider = fp;
+      const id = await getCurrentChainId();
+      if (id === REQUIRED_CHAIN_ID) {
+        hideNetworkBanner();
+        initClient(walletAddress);
         showToastMsg('✓ GenLayer Testnet Chain connected');
       } else if (walletConnected) {
-        showNetworkWarning();
+        glClient = null;
+        showNetworkBanner();
       }
     });
 
@@ -207,12 +193,12 @@ window.connectWallet = async function () {
       walletAddress = accs[0];
       initClient(walletAddress);
       document.getElementById('connectBtn').textContent =
-        walletAddress.slice(0,6) + '...' + walletAddress.slice(-4);
+        walletAddress.slice(0,6) + '…' + walletAddress.slice(-4);
     });
 
   } catch (e) {
     if (e.code === 4001) showToastMsg('Connection rejected.');
-    else { console.error(e); showToastMsg('Failed to connect. Try again.'); }
+    else { console.error('connectWallet error:', e); showToastMsg('Failed to connect wallet. Try again.'); }
   }
 };
 
@@ -220,16 +206,23 @@ function disconnectWallet() {
   walletConnected = false; walletAddress = null; glClient = null; provider = null;
   const btn = document.getElementById('connectBtn');
   btn.textContent = 'Connect Wallet'; btn.classList.remove('connected'); btn.title = '';
-  hideNetworkWarning(); initClient(null); showToastMsg('Wallet disconnected');
+  hideNetworkBanner(); initClient(null); showToastMsg('Wallet disconnected');
 }
 
 window.openFaucet = function () {
   window.open('https://testnet-faucet.genlayer.foundation/', '_blank');
 };
 
-// ── ORACLE ──
+// ── ASK ORACLE ──
+// Алгоритм:
+//   1. Уже спрашиваем? → стоп
+//   2. Есть вопрос? → фокус на инпут
+//   3. Кошелёк подключён? → подсказка
+//   4. Сеть правильная? → баннер смены сети, СТОП
+//   5. Всё ок → анимация → транзакция → ответ
 window.askOracle = async function () {
   if (isAsking) return;
+
   const input = document.getElementById('questionInput');
   const q = input.value.trim();
   if (!q) { input.focus(); return; }
@@ -239,10 +232,9 @@ window.askOracle = async function () {
     return;
   }
 
-  // Жёсткая проверка сети ПЕРЕД запросом
   if (!await isOnCorrectNetwork()) {
-    showNetworkWarning();
-    showToastMsg('⚠ Switch to GenLayer Testnet Chain first!');
+    showNetworkBanner();
+    showToastMsg('⚠ Wrong network! Switch to GenLayer Testnet Chain first.');
     return;
   }
 
@@ -250,12 +242,14 @@ window.askOracle = async function () {
   document.getElementById('sendBtn').disabled = true;
   input.disabled = true;
   document.getElementById('inputLabel').style.opacity = '0';
-  hideToast(); setTriangleText('...'); shakeOrb();
+  hideToast(); setTriangleText('…'); shakeOrb();
   showValidators(); await animateValidators();
 
   const answer = await getAnswer(q);
 
-  setTriangleText(answer); playRevealSound(); showToast(answer); hideValidators();
+  setTriangleText(answer);
+  if (answer !== '…' && answer !== '...') { playRevealSound(); showToast(answer); }
+  hideValidators();
   document.getElementById('inputLabel').style.opacity = '1';
   isAsking = false;
   document.getElementById('sendBtn').disabled = false;
@@ -263,27 +257,19 @@ window.askOracle = async function () {
 };
 
 window.handleOrbClick = function () {
+  if (!walletConnected) { showToastMsg('Connect your wallet — 1 GEN per question'); return; }
   const q = document.getElementById('questionInput').value.trim();
-  if (!walletConnected) {
-    showToastMsg('Connect your wallet — 1 GEN per question'); return;
-  }
   if (q && !isAsking) window.askOracle();
   else document.getElementById('questionInput').focus();
 };
 
 // ── GET ANSWER ──
 async function getAnswer(question) {
-  // Последняя проверка сети
-  if (!await isOnCorrectNetwork()) {
-    showNetworkWarning();
-    showToastMsg('⚠ Wrong network! Switch to GenLayer Testnet Chain.');
-    return '...';
-  }
-
-  if (!walletConnected || !glClient) { showToastMsg('Connect wallet first!'); return '...'; }
+  if (!await isOnCorrectNetwork()) { showNetworkBanner(); return '...'; }
+  if (!glClient) { showToastMsg('Wallet client not ready. Reconnect your wallet.'); return '...'; }
 
   try {
-    console.log('Sending tx with 1 GEN to GenLayer contract...');
+    console.log('[Oracle] Sending TX:', question);
 
     const txHash = await glClient.writeContract({
       address: CONTRACT_ADDRESS,
@@ -291,7 +277,9 @@ async function getAnswer(question) {
       args: [question],
       value: GEN_PRICE,
     });
-    console.log('TX sent:', txHash);
+
+    console.log('[Oracle] TX sent:', txHash);
+    showToastMsg('Transaction sent! Waiting for validators…');
 
     const receipt = await glClient.waitForTransactionReceipt({
       hash: txHash,
@@ -299,10 +287,11 @@ async function getAnswer(question) {
       fullTransaction: false,
     });
 
-    // Проверяем что транзакция не зафейлилась
-    if (receipt && receipt.isSuccess === false) {
-      console.warn('TX finalized but reverted');
-      showToastMsg('Transaction reverted on-chain. Check your GEN balance and contract.');
+    console.log('[Oracle] Receipt:', receipt);
+
+    if (receipt?.isSuccess === false) {
+      console.warn('[Oracle] TX reverted on-chain');
+      showToastMsg('❌ Transaction reverted. Check contract and GEN balance.');
       return '...';
     }
 
@@ -311,29 +300,28 @@ async function getAnswer(question) {
       functionName: 'get_answer',
       args: [],
     });
-    console.log('Answer:', result);
 
+    console.log('[Oracle] Answer:', result);
     if (result?.trim()) return result;
 
-    showToastMsg('No answer from oracle yet. Try again in a moment.');
+    showToastMsg('No answer yet. Validators may need more time.');
     return '...';
 
   } catch (e) {
-    console.warn('TX error:', e.message);
+    console.error('[Oracle] Error:', e);
     if (e.code === 4001 || e.message?.includes('rejected') || e.message?.includes('denied')) {
-      showToastMsg('Transaction rejected. No GEN spent.');
+      showToastMsg('Transaction rejected. No GEN was spent.');
       return '...';
     }
-    if (e.message?.includes('insufficient')) {
+    if (e.message?.includes('insufficient') || e.message?.includes('not enough')) {
       showToastMsg('Not enough GEN. Get tokens from the faucet!');
       return '...';
     }
     if (e.message?.includes('reverted') || e.message?.includes('execution reverted')) {
-      showToastMsg('Transaction reverted. Check your GEN balance and try again.');
+      showToastMsg('❌ Transaction reverted. The contract may need to be redeployed.');
       return '...';
     }
-    console.error('Unexpected error:', e);
-    showToastMsg('Something went wrong. See console for details.');
+    showToastMsg('Something went wrong. Check the browser console for details.');
     return '...';
   }
 }
@@ -344,7 +332,6 @@ function getAudioCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
 }
-
 function playShakeSound() {
   const ctx = getAudioCtx(), now = ctx.currentTime, dur = 1.3;
   const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
@@ -360,33 +347,27 @@ function playShakeSound() {
   noise.connect(bp); bp.connect(mg); mg.connect(ctx.destination);
   noise.start(now); noise.stop(now+dur);
 }
-
 function playRevealSound() {
-  if (window.REVEAL_SOUND_B64) {
-    new Audio(window.REVEAL_SOUND_B64).play().catch(()=>{});
-    return;
-  }
+  if (window.REVEAL_SOUND_B64) { new Audio(window.REVEAL_SOUND_B64).play().catch(()=>{}); return; }
   const ctx = getAudioCtx(), now = ctx.currentTime;
   [{t:0,f:2637,v:.055},{t:.07,f:3136,v:.04},{t:.15,f:2794,v:.032},
    {t:.24,f:3520,v:.025},{t:.34,f:2637,v:.018},{t:.46,f:3136,v:.013}]
   .forEach(({t,f,v}) => {
     const o=ctx.createOscillator(), g=ctx.createGain();
     o.type='sine'; o.frequency.value=f;
-    g.gain.setValueAtTime(0,now+t);
-    g.gain.linearRampToValueAtTime(v,now+t+.006);
+    g.gain.setValueAtTime(0,now+t); g.gain.linearRampToValueAtTime(v,now+t+.006);
     g.gain.exponentialRampToValueAtTime(.001,now+t+.22);
-    o.connect(g); g.connect(ctx.destination);
-    o.start(now+t); o.stop(now+t+.25);
+    o.connect(g); g.connect(ctx.destination); o.start(now+t); o.stop(now+t+.25);
   });
 }
 
+// ── UI HELPERS ──
 function shakeOrb() {
   const orb = document.getElementById('orb');
   orb.classList.remove('shaking'); void orb.offsetWidth; orb.classList.add('shaking');
   orb.addEventListener('animationend', ()=>orb.classList.remove('shaking'), {once:true});
   spawnParticles(); playShakeSound();
 }
-
 function setTriangleText(text) {
   const el = document.getElementById('triangleText');
   el.style.opacity = '0';
@@ -397,31 +378,29 @@ function setTriangleText(text) {
     el.style.transition = 'opacity .5s ease'; el.style.opacity = '1';
   }, 280);
 }
-
 function showValidators() { document.getElementById('validatorsStatus').classList.add('visible'); }
 function hideValidators()  { document.getElementById('validatorsStatus').classList.remove('visible'); }
 
 async function animateValidators() {
   const dots = [1,2,3,4,5].map(i=>document.getElementById('vd'+i));
   const text = document.getElementById('validatorText');
-  for (const [m, msg] of ['RECEIVING QUERY','VALIDATORS DELIBERATING','REACHING CONSENSUS','CONSENSUS REACHED'].entries()) {
+  for (const [m,msg] of ['RECEIVING QUERY','VALIDATORS DELIBERATING','REACHING CONSENSUS','CONSENSUS REACHED'].entries()) {
     text.textContent = msg;
     for (let i=0; i<=Math.min(m+1,4); i++) dots[i].classList.add('active');
     await sleep(900);
   }
 }
-
 function spawnParticles() {
   const r = document.querySelector('.orb-container').getBoundingClientRect();
   const cx=r.left+r.width/2, cy=r.top+r.height/2;
   for (let i=0; i<16; i++) {
     const p=document.createElement('div'); p.className='particle';
-    const a=Math.random()*Math.PI*2, d=70+Math.random()*140;
-    p.style.cssText=`left:${cx}px;top:${cy}px;--dx:${Math.cos(a)*d}px;--dy:${Math.sin(a)*d}px;animation-delay:${Math.random()*.2}s;background:${Math.random()>.5?'#a855f7':'#e2c97e'}`;
+    const a=Math.random()*Math.PI*2, dist=70+Math.random()*140;
+    p.style.cssText=`left:${cx}px;top:${cy}px;--dx:${Math.cos(a)*dist}px;--dy:${Math.sin(a)*dist}px;` +
+      `animation-delay:${Math.random()*.2}s;background:${Math.random()>.5?'#a855f7':'#e2c97e'}`;
     document.body.appendChild(p); setTimeout(()=>p.remove(),1500);
   }
 }
-
 function showToast(msg) {
   document.getElementById('answerText').textContent = msg;
   document.getElementById('answerToast').classList.add('show');
@@ -431,7 +410,7 @@ function hideToast() { document.getElementById('answerToast').classList.remove('
 function showToastMsg(msg) {
   document.getElementById('answerText').textContent = msg;
   document.getElementById('answerToast').classList.add('show');
-  setTimeout(()=>document.getElementById('answerToast').classList.remove('show'), 4000);
+  setTimeout(()=>document.getElementById('answerToast').classList.remove('show'), 4500);
 }
 function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
 
@@ -445,7 +424,5 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('questionInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') window.askOracle();
   });
-  document.getElementById('sendBtn').addEventListener('click', () => {
-    window.askOracle();
-  });
+  document.getElementById('sendBtn').addEventListener('click', () => window.askOracle());
 });
