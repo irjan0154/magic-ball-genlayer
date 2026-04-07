@@ -3,7 +3,7 @@ import { TransactionStatus } from 'genlayer-js/types';
 
 // ── CONSTANTS ──
 const CONTRACT_ADDRESS   = '0xD92C642114F44e5Ef4F06Daa9D19795BD2a00346';
-const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
+const GEN_PRICE          = '1000000000000000000'; // 1 GEN в wei, строкой — genlayer-js не принимает нативный BigInt
 const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
 
@@ -316,7 +316,7 @@ async function getAnswer(question) {
       functionName: 'ask_oracle',
       args: [question],
       value: GEN_PRICE,
-      gas: 200_000n,  // явный лимит газа — без него иногда фейлится eth_estimateGas
+      // gas убран — genlayer-js не принимает BigInt для gas напрямую
     });
 
     console.log('[Oracle] TX sent:', txHash);
