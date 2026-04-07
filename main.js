@@ -1,6 +1,5 @@
 import { createClient } from 'genlayer-js';
-import { testnetAsimov } from 'genlayer-js/chains';
-import { TransactionStatus, ExecutionResult } from 'genlayer-js/types';
+import { TransactionStatus } from 'genlayer-js/types';
 
 // ── CONSTANTS ──
 const CONTRACT_ADDRESS   = '0xD92C642114F44e5Ef4F06Daa9D19795BD2a00346';
@@ -8,6 +7,22 @@ const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
 const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
 
+// Явная конфигурация сети — не используем testnetAsimov из библиотеки,
+// так как он может указывать на другой RPC (старый тестнет)
+const GENLAYER_CHAIN = {
+  id: 4221,
+  name: 'GenLayer Testnet Chain',
+  nativeCurrency: { name: 'GEN', symbol: 'GEN', decimals: 18 },
+  rpcUrls: {
+    default: { http: ['https://zksync-os-testnet-genlayer.zksync.dev'] },
+    public:  { http: ['https://zksync-os-testnet-genlayer.zksync.dev'] },
+  },
+  blockExplorers: {
+    default: { url: 'https://zksync-os-testnet-genlayer.explorer.zksync.dev' },
+  },
+};
+
+// Объект для wallet_addEthereumChain / wallet_switchEthereumChain (MetaMask формат)
 const GENLAYER_NETWORK = {
   chainId: REQUIRED_CHAIN_HEX,
   chainName: 'GenLayer Testnet Chain',
@@ -25,9 +40,6 @@ let writeClient     = null;  // для записи — с кошельком + 
 let provider        = null;
 
 // ── WALLET DETECTION ──
-// MetaMask/Rabby → window.ethereum
-// OKX Wallet     → window.okxwallet
-// Несколько расширений → window.ethereum.providers[]
 function detectProvider() {
   if (typeof window.okxwallet !== 'undefined') return window.okxwallet;
   if (window.ethereum?.providers?.length) return window.ethereum.providers[0];
@@ -50,17 +62,15 @@ function waitForProvider(timeoutMs = 4000) {
 }
 
 // ── CLIENTS ──
-// readClient — только для чтения, не требует кошелька
-// writeClient — для транзакций, ОБЯЗАТЕЛЬНО нужен provider (MetaMask/OKX)
 function initReadClient() {
-  readClient = createClient({ chain: testnetAsimov });
+  readClient = createClient({ chain: GENLAYER_CHAIN });
 }
 
 function initWriteClient(address, walletProvider) {
   writeClient = createClient({
-    chain: testnetAsimov,
+    chain: GENLAYER_CHAIN,
     account: address,
-    provider: walletProvider,  // ← ключевой параметр! без него "no signer accounts"
+    provider: walletProvider,
   });
   console.log('[Client] writeClient initialized with provider:', !!walletProvider);
 }
@@ -103,7 +113,6 @@ window.switchNetwork = async function () {
       if (btn) { btn.textContent = 'Try Auto-Switch'; btn.disabled = false; }
       return;
     }
-    // OKX может кинуть ошибку даже при успешной смене → продолжаем поллинг
   }
 
   let attempts = 0;
@@ -189,15 +198,13 @@ window.connectWallet = async function () {
     btn.title = 'Click to disconnect';
 
     if (await isOnCorrectNetwork()) {
-      // Правильная сеть — инициализируем writeClient с provider
       initWriteClient(walletAddress, provider);
       hideNetworkBanner();
     } else {
-      writeClient = null; // блокируем запись на неправильной сети
+      writeClient = null;
       showNetworkBanner();
     }
 
-    // Слушаем смену сети
     provider.on('chainChanged', async () => {
       const fp = detectProvider();
       if (fp) provider = fp;
@@ -212,7 +219,6 @@ window.connectWallet = async function () {
       }
     });
 
-    // Слушаем смену аккаунта
     provider.on('accountsChanged', (accs) => {
       if (!accs.length) { disconnectWallet(); return; }
       walletAddress = accs[0];
@@ -240,13 +246,6 @@ window.openFaucet = function () {
 };
 
 // ── ASK ORACLE ──
-// Алгоритм:
-//   1. Уже спрашиваем? → стоп
-//   2. Есть вопрос? → фокус
-//   3. Кошелёк? → подсказка
-//   4. Правильная сеть? → баннер, СТОП (запрос НЕ уйдёт!)
-//   5. writeClient готов? → иначе стоп
-//   6. Всё ок → анимация → транзакция → ответ
 window.askOracle = async function () {
   if (isAsking) return;
 
@@ -259,11 +258,10 @@ window.askOracle = async function () {
     return;
   }
 
-  // Проверяем сеть прямо перед отправкой — самый важный guard
   if (!await isOnCorrectNetwork()) {
     showNetworkBanner();
     showToastMsg('⚠ Wrong network! Switch to GenLayer Testnet Chain. No GEN will be spent.');
-    return; // ← транзакция НЕ отправится
+    return;
   }
 
   if (!writeClient) {
@@ -298,7 +296,6 @@ window.handleOrbClick = function () {
 
 // ── GET ANSWER ──
 async function getAnswer(question) {
-  // Ещё раз проверяем сеть внутри
   if (!await isOnCorrectNetwork()) {
     showNetworkBanner();
     showToastMsg('⚠ Wrong network!');
@@ -319,6 +316,7 @@ async function getAnswer(question) {
       functionName: 'ask_oracle',
       args: [question],
       value: GEN_PRICE,
+      gas: 200_000n,  // явный лимит газа — без него иногда фейлится eth_estimateGas
     });
 
     console.log('[Oracle] TX sent:', txHash);
@@ -332,14 +330,12 @@ async function getAnswer(question) {
 
     console.log('[Oracle] Receipt:', receipt);
 
-    // Проверяем результат исполнения контракта
     if (receipt?.txExecutionResultName === 'FINISHED_WITH_ERROR') {
       console.warn('[Oracle] Contract execution failed:', receipt);
       showToastMsg('❌ Contract execution failed. Check the explorer for details.');
       return '...';
     }
 
-    // Читаем ответ через readClient (без кошелька)
     const result = await readClient.readContract({
       address: CONTRACT_ADDRESS,
       functionName: 'get_answer',
@@ -462,7 +458,7 @@ function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
 
 // ── BOOT ──
 document.addEventListener('DOMContentLoaded', () => {
-  initReadClient(); // read-клиент создаём сразу, кошелёк не нужен
+  initReadClient();
   document.getElementById('validatorsStatus').addEventListener('transitionend', function() {
     if (!this.classList.contains('visible'))
       [1,2,3,4,5].forEach(i=>document.getElementById('vd'+i).classList.remove('active'));
