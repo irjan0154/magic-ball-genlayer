@@ -3,7 +3,7 @@ import { testnetAsimov } from 'genlayer-js/chains';
 import { TransactionStatus, ExecutionResult } from 'genlayer-js/types';
 
 // ── CONSTANTS ──
-const CONTRACT_ADDRESS   = '0xD92C642114F44e5Ef4F06Daa9D19795BD2a00346';
+const CONTRACT_ADDRESS   = '0x4E09a7752CFe764F955e49D1aE677378270f3550';
 const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
 const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
