@@ -1,11 +1,11 @@
 import { createClient } from 'genlayer-js';
 import { testnetAsimov } from 'genlayer-js/chains';
-import { TransactionStatus } from 'genlayer-js/types';
+import { TransactionStatus, ExecutionResult } from 'genlayer-js/types';
 
 // ── CONSTANTS ──
-const CONTRACT_ADDRESS  = '0x87be8D5C2D45B8Eb7a8eFDC8e5829c97d05bA1c7';
-const GEN_PRICE         = BigInt('1000000000000000000');
-const REQUIRED_CHAIN_ID = 4221;
+const CONTRACT_ADDRESS   = '0x87be8D5C2D45B8Eb7a8eFDC8e5829c97d05bA1c7';
+const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
+const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
 
 const GENLAYER_NETWORK = {
@@ -20,7 +20,8 @@ const GENLAYER_NETWORK = {
 let walletConnected = false;
 let walletAddress   = null;
 let isAsking        = false;
-let glClient        = null;
+let readClient      = null;  // для чтения — без кошелька
+let writeClient     = null;  // для записи — с кошельком + provider
 let provider        = null;
 
 // ── WALLET DETECTION ──
@@ -48,12 +49,20 @@ function waitForProvider(timeoutMs = 4000) {
   });
 }
 
-// ── GENLAYER CLIENT ──
-function initClient(account) {
-  glClient = createClient({
+// ── CLIENTS ──
+// readClient — только для чтения, не требует кошелька
+// writeClient — для транзакций, ОБЯЗАТЕЛЬНО нужен provider (MetaMask/OKX)
+function initReadClient() {
+  readClient = createClient({ chain: testnetAsimov });
+}
+
+function initWriteClient(address, walletProvider) {
+  writeClient = createClient({
     chain: testnetAsimov,
-    account: account || undefined,
+    account: address,
+    provider: walletProvider,  // ← ключевой параметр! без него "no signer accounts"
   });
+  console.log('[Client] writeClient initialized with provider:', !!walletProvider);
 }
 
 // ── NETWORK HELPERS ──
@@ -85,15 +94,16 @@ window.switchNetwork = async function () {
       try {
         await provider.request({ method: 'wallet_addEthereumChain', params: [GENLAYER_NETWORK] });
       } catch {
-        showToastMsg('Please add GenLayer Testnet Chain manually in your wallet.');
-        if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
+        showToastMsg('Add GenLayer Testnet Chain manually in your wallet.');
+        if (btn) { btn.textContent = 'Try Auto-Switch'; btn.disabled = false; }
         return;
       }
     } else if (err.code === 4001) {
-      showToastMsg('Rejected. Please switch the network manually in your wallet.');
-      if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
+      showToastMsg('Rejected. Switch the network manually in your wallet.');
+      if (btn) { btn.textContent = 'Try Auto-Switch'; btn.disabled = false; }
       return;
     }
+    // OKX может кинуть ошибку даже при успешной смене → продолжаем поллинг
   }
 
   let attempts = 0;
@@ -105,20 +115,18 @@ window.switchNetwork = async function () {
     if (id === REQUIRED_CHAIN_ID) {
       clearInterval(poll);
       hideNetworkBanner();
-      initClient(walletAddress);
+      if (walletAddress) initWriteClient(walletAddress, provider);
       showToastMsg('✓ Switched to GenLayer Testnet Chain');
-      if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
+      if (btn) { btn.textContent = 'Try Auto-Switch'; btn.disabled = false; }
     } else if (attempts >= 60) {
       clearInterval(poll);
-      showToastMsg('Network not switched. Please do it manually in your wallet.');
-      if (btn) { btn.textContent = 'Switch Network'; btn.disabled = false; }
+      showToastMsg('Not switched. Please switch manually in your wallet.');
+      if (btn) { btn.textContent = 'Try Auto-Switch'; btn.disabled = false; }
     }
   }, 500);
 };
 
 // ── NETWORK BANNER ──
-// OKX часто игнорирует wallet_switchEthereumChain — поэтому показываем
-// чёткую инструкцию как поменять вручную + кнопку попытки автосмены
 function showNetworkBanner() {
   let b = document.getElementById('networkBanner');
   if (!b) {
@@ -135,15 +143,15 @@ function showNetworkBanner() {
     <div style="color:#e2c97e;margin-bottom:4px;font-size:14px;font-weight:600;">
       Switch to <strong>GenLayer Testnet Chain</strong>
     </div>
-    <div style="color:#94a3b8;font-size:11px;margin-bottom:12px;line-height:1.6;">
+    <div style="color:#94a3b8;font-size:11px;margin-bottom:12px;">
       Chain ID: <strong style="color:#c084fc;">4221</strong> &nbsp;|&nbsp;
       RPC: <strong style="color:#c084fc;">zksync-os-testnet-genlayer.zksync.dev</strong>
     </div>
-    <div style="color:#64748b;font-size:11px;margin-bottom:12px;line-height:1.7;text-align:left;
+    <div style="color:#64748b;font-size:11px;margin-bottom:14px;line-height:1.7;text-align:left;
       background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;">
-      <strong style="color:#94a3b8;">Если кнопка не помогает:</strong><br>
-      Зайди в кошелёк вручную → выбери сеть → найди или добавь<br>
-      <em style="color:#c084fc;">GenLayer Testnet Chain</em> (Chain ID 4221)
+      <strong style="color:#94a3b8;">Как переключить вручную:</strong><br>
+      Открой кошелёк → список сетей → найди или добавь<br>
+      <em style="color:#c084fc;">GenLayer Testnet Chain</em>
     </div>
     <button onclick="window.switchNetwork()" style="
       background:linear-gradient(135deg,#7c3aed,#a855f7);border:none;color:#fff;
@@ -176,51 +184,55 @@ window.connectWallet = async function () {
     walletConnected = true;
 
     const btn = document.getElementById('connectBtn');
-    btn.textContent = walletAddress.slice(0,6) + '…' + walletAddress.slice(-4);
+    btn.textContent = walletAddress.slice(0, 6) + '…' + walletAddress.slice(-4);
     btn.classList.add('connected');
     btn.title = 'Click to disconnect';
 
     if (await isOnCorrectNetwork()) {
-      initClient(walletAddress);
+      // Правильная сеть — инициализируем writeClient с provider
+      initWriteClient(walletAddress, provider);
       hideNetworkBanner();
     } else {
-      glClient = null;
+      writeClient = null; // блокируем запись на неправильной сети
       showNetworkBanner();
     }
 
+    // Слушаем смену сети
     provider.on('chainChanged', async () => {
       const fp = detectProvider();
       if (fp) provider = fp;
       const id = await getCurrentChainId();
       if (id === REQUIRED_CHAIN_ID) {
         hideNetworkBanner();
-        initClient(walletAddress);
+        initWriteClient(walletAddress, provider);
         showToastMsg('✓ GenLayer Testnet Chain connected');
       } else if (walletConnected) {
-        glClient = null;
+        writeClient = null;
         showNetworkBanner();
       }
     });
 
+    // Слушаем смену аккаунта
     provider.on('accountsChanged', (accs) => {
       if (!accs.length) { disconnectWallet(); return; }
       walletAddress = accs[0];
-      initClient(walletAddress);
+      initWriteClient(walletAddress, provider);
       document.getElementById('connectBtn').textContent =
-        walletAddress.slice(0,6) + '…' + walletAddress.slice(-4);
+        walletAddress.slice(0, 6) + '…' + walletAddress.slice(-4);
     });
 
   } catch (e) {
     if (e.code === 4001) showToastMsg('Connection rejected.');
-    else { console.error('connectWallet error:', e); showToastMsg('Failed to connect wallet. Try again.'); }
+    else { console.error('connectWallet error:', e); showToastMsg('Failed to connect. Try again.'); }
   }
 };
 
 function disconnectWallet() {
-  walletConnected = false; walletAddress = null; glClient = null; provider = null;
+  walletConnected = false; walletAddress = null;
+  writeClient = null; provider = null;
   const btn = document.getElementById('connectBtn');
   btn.textContent = 'Connect Wallet'; btn.classList.remove('connected'); btn.title = '';
-  hideNetworkBanner(); initClient(null); showToastMsg('Wallet disconnected');
+  hideNetworkBanner(); showToastMsg('Wallet disconnected');
 }
 
 window.openFaucet = function () {
@@ -230,10 +242,11 @@ window.openFaucet = function () {
 // ── ASK ORACLE ──
 // Алгоритм:
 //   1. Уже спрашиваем? → стоп
-//   2. Есть вопрос? → фокус на инпут
-//   3. Кошелёк подключён? → подсказка
-//   4. Сеть правильная? → баннер смены сети, СТОП
-//   5. Всё ок → анимация → транзакция → ответ
+//   2. Есть вопрос? → фокус
+//   3. Кошелёк? → подсказка
+//   4. Правильная сеть? → баннер, СТОП (запрос НЕ уйдёт!)
+//   5. writeClient готов? → иначе стоп
+//   6. Всё ок → анимация → транзакция → ответ
 window.askOracle = async function () {
   if (isAsking) return;
 
@@ -246,9 +259,15 @@ window.askOracle = async function () {
     return;
   }
 
+  // Проверяем сеть прямо перед отправкой — самый важный guard
   if (!await isOnCorrectNetwork()) {
     showNetworkBanner();
-    showToastMsg('⚠ Wrong network! Switch to GenLayer Testnet Chain first.');
+    showToastMsg('⚠ Wrong network! Switch to GenLayer Testnet Chain. No GEN will be spent.');
+    return; // ← транзакция НЕ отправится
+  }
+
+  if (!writeClient) {
+    showToastMsg('Reconnect your wallet and make sure you are on GenLayer Testnet Chain.');
     return;
   }
 
@@ -279,26 +298,33 @@ window.handleOrbClick = function () {
 
 // ── GET ANSWER ──
 async function getAnswer(question) {
-  if (!await isOnCorrectNetwork()) { showNetworkBanner(); return '...'; }
-  if (!glClient) { showToastMsg('Wallet client not ready. Reconnect your wallet.'); return '...'; }
+  // Ещё раз проверяем сеть внутри
+  if (!await isOnCorrectNetwork()) {
+    showNetworkBanner();
+    showToastMsg('⚠ Wrong network!');
+    return '...';
+  }
+  if (!writeClient) {
+    showToastMsg('Wallet not ready. Reconnect.');
+    return '...';
+  }
 
   try {
     console.log('[Oracle] Sending TX:', question);
     console.log('[Oracle] Contract:', CONTRACT_ADDRESS);
-    console.log('[Oracle] Value:', GEN_PRICE.toString(), 'wei');
+    console.log('[Oracle] Value: 1 GEN =', GEN_PRICE.toString());
 
-    const txHash = await glClient.writeContract({
+    const txHash = await writeClient.writeContract({
       address: CONTRACT_ADDRESS,
       functionName: 'ask_oracle',
       args: [question],
       value: GEN_PRICE,
-      gas: 500000n, // явный газ-лимит — без него SDK пытается эстимировать и может упасть
     });
 
     console.log('[Oracle] TX sent:', txHash);
-    showToastMsg('Transaction sent! Waiting for validators…');
+    showToastMsg('Transaction sent! Validators are deliberating…');
 
-    const receipt = await glClient.waitForTransactionReceipt({
+    const receipt = await readClient.waitForTransactionReceipt({
       hash: txHash,
       status: TransactionStatus.FINALIZED,
       fullTransaction: false,
@@ -306,13 +332,15 @@ async function getAnswer(question) {
 
     console.log('[Oracle] Receipt:', receipt);
 
-    if (receipt?.isSuccess === false) {
-      console.warn('[Oracle] TX reverted on-chain');
-      showToastMsg('❌ Transaction reverted. Check contract and GEN balance.');
+    // Проверяем результат исполнения контракта
+    if (receipt?.txExecutionResultName === 'FINISHED_WITH_ERROR') {
+      console.warn('[Oracle] Contract execution failed:', receipt);
+      showToastMsg('❌ Contract execution failed. Check the explorer for details.');
       return '...';
     }
 
-    const result = await glClient.readContract({
+    // Читаем ответ через readClient (без кошелька)
+    const result = await readClient.readContract({
       address: CONTRACT_ADDRESS,
       functionName: 'get_answer',
       args: [],
@@ -325,7 +353,8 @@ async function getAnswer(question) {
     return '...';
 
   } catch (e) {
-    console.error('[Oracle] Error:', e);
+    console.error('[Oracle] Full error:', e);
+
     if (e.code === 4001 || e.message?.includes('rejected') || e.message?.includes('denied')) {
       showToastMsg('Transaction rejected. No GEN was spent.');
       return '...';
@@ -335,10 +364,11 @@ async function getAnswer(question) {
       return '...';
     }
     if (e.message?.includes('reverted') || e.message?.includes('execution reverted')) {
-      showToastMsg('❌ Transaction reverted. The contract may need to be redeployed.');
+      showToastMsg('❌ Transaction reverted. See console (F12) for details.');
       return '...';
     }
-    showToastMsg('Something went wrong. Check the browser console for details.');
+
+    showToastMsg('Something went wrong. Open console (F12) for details.');
     return '...';
   }
 }
@@ -397,7 +427,6 @@ function setTriangleText(text) {
 }
 function showValidators() { document.getElementById('validatorsStatus').classList.add('visible'); }
 function hideValidators()  { document.getElementById('validatorsStatus').classList.remove('visible'); }
-
 async function animateValidators() {
   const dots = [1,2,3,4,5].map(i=>document.getElementById('vd'+i));
   const text = document.getElementById('validatorText');
@@ -433,7 +462,7 @@ function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
 
 // ── BOOT ──
 document.addEventListener('DOMContentLoaded', () => {
-  initClient(null);
+  initReadClient(); // read-клиент создаём сразу, кошелёк не нужен
   document.getElementById('validatorsStatus').addEventListener('transitionend', function() {
     if (!this.classList.contains('visible'))
       [1,2,3,4,5].forEach(i=>document.getElementById('vd'+i).classList.remove('active'));
