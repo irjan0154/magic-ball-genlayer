@@ -117,6 +117,8 @@ window.switchNetwork = async function () {
 };
 
 // ── NETWORK BANNER ──
+// OKX часто игнорирует wallet_switchEthereumChain — поэтому показываем
+// чёткую инструкцию как поменять вручную + кнопку попытки автосмены
 function showNetworkBanner() {
   let b = document.getElementById('networkBanner');
   if (!b) {
@@ -124,18 +126,30 @@ function showNetworkBanner() {
     b.id = 'networkBanner';
     b.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:500;' +
       'background:rgba(15,8,35,.97);border:1px solid rgba(239,68,68,.6);border-radius:12px;' +
-      'padding:16px 24px;text-align:center;font-family:Rajdhani,Arial,sans-serif;font-size:13px;' +
-      'box-shadow:0 8px 32px rgba(0,0,0,.8);max-width:420px;width:calc(100% - 40px);';
+      'padding:18px 24px;text-align:center;font-family:Rajdhani,Arial,sans-serif;font-size:13px;' +
+      'box-shadow:0 8px 32px rgba(0,0,0,.8);max-width:460px;width:calc(100% - 40px);';
     document.body.appendChild(b);
   }
   b.innerHTML = `
-    <div style="font-size:11px;letter-spacing:.2em;color:#f87171;margin-bottom:6px;">⚠ WRONG NETWORK</div>
-    <div style="color:#e2c97e;margin-bottom:12px;">Switch to <strong>GenLayer Testnet Chain</strong> (Chain ID 4221)</div>
+    <div style="font-size:11px;letter-spacing:.2em;color:#f87171;margin-bottom:8px;">⚠ WRONG NETWORK</div>
+    <div style="color:#e2c97e;margin-bottom:4px;font-size:14px;font-weight:600;">
+      Switch to <strong>GenLayer Testnet Chain</strong>
+    </div>
+    <div style="color:#94a3b8;font-size:11px;margin-bottom:12px;line-height:1.6;">
+      Chain ID: <strong style="color:#c084fc;">4221</strong> &nbsp;|&nbsp;
+      RPC: <strong style="color:#c084fc;">zksync-os-testnet-genlayer.zksync.dev</strong>
+    </div>
+    <div style="color:#64748b;font-size:11px;margin-bottom:12px;line-height:1.7;text-align:left;
+      background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;">
+      <strong style="color:#94a3b8;">Если кнопка не помогает:</strong><br>
+      Зайди в кошелёк вручную → выбери сеть → найди или добавь<br>
+      <em style="color:#c084fc;">GenLayer Testnet Chain</em> (Chain ID 4221)
+    </div>
     <button onclick="window.switchNetwork()" style="
       background:linear-gradient(135deg,#7c3aed,#a855f7);border:none;color:#fff;
       font-family:Rajdhani,Arial,sans-serif;font-size:13px;font-weight:600;
       letter-spacing:.06em;padding:8px 22px;border-radius:8px;cursor:pointer;">
-      Switch Network</button>`;
+      Try Auto-Switch</button>`;
   b.style.display = 'block';
 }
 
@@ -270,12 +284,15 @@ async function getAnswer(question) {
 
   try {
     console.log('[Oracle] Sending TX:', question);
+    console.log('[Oracle] Contract:', CONTRACT_ADDRESS);
+    console.log('[Oracle] Value:', GEN_PRICE.toString(), 'wei');
 
     const txHash = await glClient.writeContract({
       address: CONTRACT_ADDRESS,
       functionName: 'ask_oracle',
       args: [question],
       value: GEN_PRICE,
+      gas: 500000n, // явный газ-лимит — без него SDK пытается эстимировать и может упасть
     });
 
     console.log('[Oracle] TX sent:', txHash);
