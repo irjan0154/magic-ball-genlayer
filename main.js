@@ -8,16 +8,8 @@ const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
 const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
 
-// Берём testnetAsimov целиком (включая consensusMainContract ABI и прочие поля
-// которые нужны genlayer-js внутри), но переопределяем только rpcUrls
-// на тот RPC который даёт тестовые токены через кран.
-const GENLAYER_CHAIN = {
-  ...testnetAsimov,
-  rpcUrls: {
-    default: { http: ['https://zksync-os-testnet-genlayer.zksync.dev'] },
-    public:  { http: ['https://zksync-os-testnet-genlayer.zksync.dev'] },
-  },
-};
+// testnetAsimov используем напрямую — он содержит правильный RPC для genlayer-js
+// НЕ переопределяем rpcUrls — это ломало отправку транзакций через ConsensusMain
 
 // Объект для wallet_addEthereumChain / wallet_switchEthereumChain (MetaMask формат)
 const GENLAYER_NETWORK = {
@@ -60,12 +52,12 @@ function waitForProvider(timeoutMs = 4000) {
 
 // ── CLIENTS ──
 function initReadClient() {
-  readClient = createClient({ chain: GENLAYER_CHAIN });
+  readClient = createClient({ chain: testnetAsimov });
 }
 
 function initWriteClient(address, walletProvider) {
   writeClient = createClient({
-    chain: GENLAYER_CHAIN,
+    chain: testnetAsimov,
     account: address,
     provider: walletProvider,
   });
