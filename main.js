@@ -306,26 +306,42 @@ async function getAnswer(question) {
       functionName: 'ask_oracle',
       args: [question],
       value: GEN_PRICE,
-      // gas убран — genlayer-js не принимает BigInt для gas напрямую
     });
 
     console.log('[Oracle] TX sent:', txHash);
     showToastMsg('Transaction sent! Validators are deliberating…');
 
-    const receipt = await readClient.waitForTransactionReceipt({
-      hash: txHash,
-      status: TransactionStatus.FINALIZED,
-      fullTransaction: false,
-    });
+    // Ждём ACCEPTED сначала — быстрее чем FINALIZED
+    // Используем getTransaction вместо waitForTransactionReceipt
+    // чтобы избежать ошибки «no NewTransaction event found»
+    let attempts = 0;
+    let txData = null;
+    while (attempts < 60) {
+      await sleep(3000);
+      attempts++;
+      try {
+        txData = await readClient.getTransaction({ hash: txHash });
+        console.log('[Oracle] TX status:', txData?.statusName, txData?.status);
+        // status 5 = ACCEPTED, 7 = FINALIZED
+        if (txData?.status >= 5) break;
+      } catch (pollErr) {
+        console.warn('[Oracle] Poll error:', pollErr.message);
+      }
+    }
 
-    console.log('[Oracle] Receipt:', receipt);
+    console.log('[Oracle] TX data:', txData);
 
-    if (receipt?.txExecutionResultName === 'FINISHED_WITH_ERROR') {
-      console.warn('[Oracle] Contract execution failed:', receipt);
-      showToastMsg('❌ Contract execution failed. Check the explorer for details.');
+    if (!txData) {
+      showToastMsg('Validators are still deliberating… Check back later.');
       return '...';
     }
 
+    if (txData?.result === 3 || txData?.result_name === 'ERROR') {
+      showToastMsg('❌ Contract execution failed.');
+      return '...';
+    }
+
+    // Читаем ответ
     const result = await readClient.readContract({
       address: CONTRACT_ADDRESS,
       functionName: 'get_answer',
