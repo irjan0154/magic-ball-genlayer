@@ -8,32 +8,17 @@ const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
 const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
 
-// testnetAsimov берём как основу, но переопределяем:
-// 1. rpcUrls — на актуальный ZKSync RPC (там кран и токены)
-// 2. consensusMainContract.address — старый 0x6CAFF6... устарел, актуальный из доков валидаторов
-const GENLAYER_CHAIN = {
-  ...testnetAsimov,
-  rpcUrls: {
-    default: { http: ['https://zksync-os-testnet-genlayer.zksync.dev'] },
-    public:  { http: ['https://zksync-os-testnet-genlayer.zksync.dev'] },
-  },
-  consensusMainContract: {
-    ...testnetAsimov.consensusMainContract,
-    address: '0x67fd4aC71530FB220E0B7F90668BAF977B88fF07',
-  },
-  consensusDataContract: {
-    ...testnetAsimov.consensusDataContract,
-    address: '0xB6E1316E57d47d82FDcEa5002028a554754EF243',
-  },
-};
+// Используем testnetAsimov напрямую — контракт задеплоен именно там
+// ConsensusMain: 0x67fd4aC71530FB220E0B7F90668BAF977B88fF07
+// RPC: rpc-asimov.genlayer.com
 
 // Объект для wallet_addEthereumChain / wallet_switchEthereumChain (MetaMask формат)
 const GENLAYER_NETWORK = {
   chainId: REQUIRED_CHAIN_HEX,
-  chainName: 'GenLayer Testnet Chain',
+  chainName: 'GenLayer Asimov Testnet',
   nativeCurrency: { name: 'GEN', symbol: 'GEN', decimals: 18 },
-  rpcUrls: ['https://zksync-os-testnet-genlayer.zksync.dev'],
-  blockExplorerUrls: ['https://zksync-os-testnet-genlayer.explorer.zksync.dev'],
+  rpcUrls: ['https://rpc-asimov.genlayer.com'],
+  blockExplorerUrls: ['https://explorer-asimov.genlayer.com'],
 };
 
 // ── STATE ──
@@ -68,12 +53,12 @@ function waitForProvider(timeoutMs = 4000) {
 
 // ── CLIENTS ──
 function initReadClient() {
-  readClient = createClient({ chain: GENLAYER_CHAIN });
+  readClient = createClient({ chain: testnetAsimov });
 }
 
 function initWriteClient(address, walletProvider) {
   writeClient = createClient({
-    chain: GENLAYER_CHAIN,
+    chain: testnetAsimov,
     account: address,
     provider: walletProvider,
   });
@@ -155,11 +140,11 @@ function showNetworkBanner() {
   b.innerHTML = `
     <div style="font-size:11px;letter-spacing:.2em;color:#f87171;margin-bottom:8px;">⚠ WRONG NETWORK</div>
     <div style="color:#e2c97e;margin-bottom:4px;font-size:14px;font-weight:600;">
-      Switch to <strong>GenLayer Testnet Chain</strong>
+      Switch to <strong>GenLayer Asimov Testnet</strong>
     </div>
     <div style="color:#94a3b8;font-size:11px;margin-bottom:12px;">
       Chain ID: <strong style="color:#c084fc;">4221</strong> &nbsp;|&nbsp;
-      RPC: <strong style="color:#c084fc;">zksync-os-testnet-genlayer.zksync.dev</strong>
+      RPC: <strong style="color:#c084fc;">rpc-asimov.genlayer.com</strong>
     </div>
     <div style="color:#64748b;font-size:11px;margin-bottom:14px;line-height:1.7;text-align:left;
       background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;">
