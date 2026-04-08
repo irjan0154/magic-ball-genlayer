@@ -320,7 +320,7 @@ async function getAnswer(question) {
     // «no NewTransaction event found» на этой версии сети
     let attempts = 0;
     let txData = null;
-    while (attempts < 60) {
+    while (attempts < 120) {
       await sleep(3000);
       attempts++;
       try {
