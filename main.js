@@ -1,24 +1,21 @@
 import { createClient } from 'genlayer-js';
+import { testnetAsimov } from 'genlayer-js/chains';
 import { TransactionStatus } from 'genlayer-js/types';
 
 // ── CONSTANTS ──
 const CONTRACT_ADDRESS   = '0xD92C642114F44e5Ef4F06Daa9D19795BD2a00346';
-const GEN_PRICE          = '1000000000000000000'; // 1 GEN в wei, строкой — genlayer-js не принимает нативный BigInt
+const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
 const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
 
-// Явная конфигурация сети — не используем testnetAsimov из библиотеки,
-// так как он может указывать на другой RPC (старый тестнет)
+// Берём testnetAsimov целиком (включая consensusMainContract ABI и прочие поля
+// которые нужны genlayer-js внутри), но переопределяем только rpcUrls
+// на тот RPC который даёт тестовые токены через кран.
 const GENLAYER_CHAIN = {
-  id: 4221,
-  name: 'GenLayer Testnet Chain',
-  nativeCurrency: { name: 'GEN', symbol: 'GEN', decimals: 18 },
+  ...testnetAsimov,
   rpcUrls: {
     default: { http: ['https://zksync-os-testnet-genlayer.zksync.dev'] },
     public:  { http: ['https://zksync-os-testnet-genlayer.zksync.dev'] },
-  },
-  blockExplorers: {
-    default: { url: 'https://zksync-os-testnet-genlayer.explorer.zksync.dev' },
   },
 };
 
