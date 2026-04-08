@@ -153,9 +153,10 @@ function showNetworkBanner() {
     </div>
     <div style="color:#64748b;font-size:11px;margin-bottom:14px;line-height:1.7;text-align:left;
       background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;">
-      <strong style="color:#94a3b8;">Как переключить вручную:</strong><br>
-      Открой кошелёк → список сетей → найди или добавь<br>
-      <em style="color:#c084fc;">GenLayer Testnet Chain</em>
+      <strong style="color:#94a3b8;">To switch manually:</strong><br>
+      Open your wallet → Networks → find or add<br>
+      <em style="color:#c084fc;">GenLayer Bradbury Testnet</em> (Chain ID 4221)<br>
+      <span style="color:#475569;font-size:10px;">Any request will be blocked until correct network is set.</span>
     </div>
     <button onclick="window.switchNetwork()" style="
       background:linear-gradient(135deg,#7c3aed,#a855f7);border:none;color:#fff;
@@ -253,14 +254,19 @@ window.askOracle = async function () {
     return;
   }
 
-  if (!await isOnCorrectNetwork()) {
+  // ── ЖЁСТКАЯ ПРОВЕРКА СЕТИ ──
+  // Проверяем прямо перед запросом — транзакция НЕ уйдёт если сеть неправильная
+  const chainOk = await isOnCorrectNetwork();
+  if (!chainOk) {
     showNetworkBanner();
-    showToastMsg('⚠ Wrong network! Switch to GenLayer Testnet Chain. No GEN will be spent.');
-    return;
+    showToastMsg('⚠ Wrong network! Switch to GenLayer Bradbury Testnet first. No GEN spent.');
+    return; // СТОП — дальше не идём
   }
 
   if (!writeClient) {
-    showToastMsg('Reconnect your wallet and make sure you are on GenLayer Testnet Chain.');
+    // writeClient null = сеть была неправильной при подключении
+    showNetworkBanner();
+    showToastMsg('Reconnect your wallet on GenLayer Bradbury Testnet.');
     return;
   }
 
@@ -305,6 +311,14 @@ async function getAnswer(question) {
     console.log('[Oracle] Sending TX:', question);
     console.log('[Oracle] Contract:', CONTRACT_ADDRESS);
     console.log('[Oracle] Value: 1 GEN =', GEN_PRICE.toString());
+
+    // Финальная проверка сети прямо перед отправкой транзакции
+    // Это защита от случая когда пользователь сменил сеть во время анимации валидаторов
+    if (!await isOnCorrectNetwork()) {
+      showNetworkBanner();
+      showToastMsg('⚠ Network changed during request! No GEN spent. Try again.');
+      return '...';
+    }
 
     const txHash = await writeClient.writeContract({
       address: CONTRACT_ADDRESS,
