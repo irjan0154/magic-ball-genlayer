@@ -1,24 +1,29 @@
 import { createClient } from 'genlayer-js';
-import { testnetAsimov } from 'genlayer-js/chains';
+import { testnetBradbury } from 'genlayer-js/chains';
 import { TransactionStatus } from 'genlayer-js/types';
 
 // ── CONSTANTS ──
-const CONTRACT_ADDRESS   = '0xd2620e1c633b1F6195F1bAf09778c9428cd52bB5';
+const CONTRACT_ADDRESS   = '0x0C61b3f444dD9b498310e37ba59A504bC3F571Ba';
 const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
 const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
 
-// Используем testnetAsimov напрямую — контракт задеплоен именно там
-// ConsensusMain: 0x67fd4aC71530FB220E0B7F90668BAF977B88fF07
-// RPC: rpc-asimov.genlayer.com
+// Bradbury: SDK использует GenLayer RPC, MetaMask — ZKSync Chain RPC
+// testnetBradbury уже содержит правильный consensusMainContract и ABI
+const GENLAYER_CHAIN = {
+  ...testnetBradbury,
+  // GenLayer RPC уже правильный: rpc-bradbury.genlayer.com
+  // Переопределяем только для MetaMask (ZKSync Chain RPC)
+};
 
 // Объект для wallet_addEthereumChain / wallet_switchEthereumChain (MetaMask формат)
+// MetaMask использует ZKSync Chain RPC, SDK использует GenLayer RPC внутри
 const GENLAYER_NETWORK = {
   chainId: REQUIRED_CHAIN_HEX,
-  chainName: 'GenLayer Asimov Testnet',
+  chainName: 'GenLayer Bradbury Testnet',
   nativeCurrency: { name: 'GEN', symbol: 'GEN', decimals: 18 },
-  rpcUrls: ['https://rpc-asimov.genlayer.com'],
-  blockExplorerUrls: ['https://explorer-asimov.genlayer.com'],
+  rpcUrls: ['https://zksync-os-testnet-genlayer.zksync.dev'],
+  blockExplorerUrls: ['https://explorer-bradbury.genlayer.com'],
 };
 
 // ── STATE ──
@@ -58,7 +63,7 @@ function initReadClient() {
 
 function initWriteClient(address, walletProvider) {
   writeClient = createClient({
-    chain: testnetAsimov,
+    chain: GENLAYER_CHAIN,
     account: address,
     provider: walletProvider,
   });
@@ -115,7 +120,7 @@ window.switchNetwork = async function () {
       clearInterval(poll);
       hideNetworkBanner();
       if (walletAddress) initWriteClient(walletAddress, provider);
-      showToastMsg('✓ Switched to GenLayer Testnet Chain');
+      showToastMsg('✓ Switched to GenLayer Bradbury Testnet');
       if (btn) { btn.textContent = 'Try Auto-Switch'; btn.disabled = false; }
     } else if (attempts >= 60) {
       clearInterval(poll);
@@ -140,11 +145,11 @@ function showNetworkBanner() {
   b.innerHTML = `
     <div style="font-size:11px;letter-spacing:.2em;color:#f87171;margin-bottom:8px;">⚠ WRONG NETWORK</div>
     <div style="color:#e2c97e;margin-bottom:4px;font-size:14px;font-weight:600;">
-      Switch to <strong>GenLayer Asimov Testnet</strong>
+      Switch to <strong>GenLayer Bradbury Testnet</strong>
     </div>
     <div style="color:#94a3b8;font-size:11px;margin-bottom:12px;">
       Chain ID: <strong style="color:#c084fc;">4221</strong> &nbsp;|&nbsp;
-      RPC: <strong style="color:#c084fc;">rpc-asimov.genlayer.com</strong>
+      RPC: <strong style="color:#c084fc;">zksync-os-testnet-genlayer.zksync.dev</strong>
     </div>
     <div style="color:#64748b;font-size:11px;margin-bottom:14px;line-height:1.7;text-align:left;
       background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;">
@@ -202,7 +207,7 @@ window.connectWallet = async function () {
       if (id === REQUIRED_CHAIN_ID) {
         hideNetworkBanner();
         initWriteClient(walletAddress, provider);
-        showToastMsg('✓ GenLayer Testnet Chain connected');
+        showToastMsg('✓ GenLayer Bradbury Testnet connected');
       } else if (walletConnected) {
         writeClient = null;
         showNetworkBanner();
@@ -311,9 +316,8 @@ async function getAnswer(question) {
     console.log('[Oracle] TX sent:', txHash);
     showToastMsg('Transaction sent! Validators are deliberating…');
 
-    // Ждём ACCEPTED сначала — быстрее чем FINALIZED
-    // Используем getTransaction вместо waitForTransactionReceipt
-    // чтобы избежать ошибки «no NewTransaction event found»
+    // Поллинг через getTransaction — waitForTransactionReceipt падает с
+    // «no NewTransaction event found» на этой версии сети
     let attempts = 0;
     let txData = null;
     while (attempts < 60) {
@@ -321,27 +325,26 @@ async function getAnswer(question) {
       attempts++;
       try {
         txData = await readClient.getTransaction({ hash: txHash });
-        console.log('[Oracle] TX status:', txData?.statusName, txData?.status);
-        // status 5 = ACCEPTED, 7 = FINALIZED
+        console.log('[Oracle] TX status:', txData?.statusName, '| result:', txData?.result_name);
+        // status: 5=ACCEPTED, 7=FINALIZED
         if (txData?.status >= 5) break;
       } catch (pollErr) {
-        console.warn('[Oracle] Poll error:', pollErr.message);
+        console.warn('[Oracle] Poll attempt', attempts, ':', pollErr.message);
       }
     }
 
-    console.log('[Oracle] TX data:', txData);
+    console.log('[Oracle] Final TX data:', txData);
 
-    if (!txData) {
+    if (!txData || txData.status < 5) {
       showToastMsg('Validators are still deliberating… Check back later.');
       return '...';
     }
 
-    if (txData?.result === 3 || txData?.result_name === 'ERROR') {
+    if (txData?.result_name === 'ERROR' || txData?.result === 3) {
       showToastMsg('❌ Contract execution failed.');
       return '...';
     }
 
-    // Читаем ответ
     const result = await readClient.readContract({
       address: CONTRACT_ADDRESS,
       functionName: 'get_answer',
