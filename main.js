@@ -3,7 +3,7 @@ import { testnetBradbury } from 'genlayer-js/chains';
 import { TransactionStatus } from 'genlayer-js/types';
 
 // ── CONSTANTS ──
-const CONTRACT_ADDRESS   = '0x0C61b3f444dD9b498310e37ba59A504bC3F571Ba';
+const CONTRACT_ADDRESS   = '0x95D81D4fC7AaFa0653EbadD71A437693a85d644A';
 const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
 const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
@@ -58,7 +58,7 @@ function waitForProvider(timeoutMs = 4000) {
 
 // ── CLIENTS ──
 function initReadClient() {
-  readClient = createClient({ chain: testnetAsimov });
+  readClient = createClient({ chain: testnetBradbury });
 }
 
 function initWriteClient(address, walletProvider) {
