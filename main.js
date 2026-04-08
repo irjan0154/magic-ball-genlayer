@@ -8,8 +8,24 @@ const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
 const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
 
-// testnetAsimov используем напрямую — он содержит правильный RPC для genlayer-js
-// НЕ переопределяем rpcUrls — это ломало отправку транзакций через ConsensusMain
+// testnetAsimov берём как основу, но переопределяем:
+// 1. rpcUrls — на актуальный ZKSync RPC (там кран и токены)
+// 2. consensusMainContract.address — старый 0x6CAFF6... устарел, актуальный из доков валидаторов
+const GENLAYER_CHAIN = {
+  ...testnetAsimov,
+  rpcUrls: {
+    default: { http: ['https://zksync-os-testnet-genlayer.zksync.dev'] },
+    public:  { http: ['https://zksync-os-testnet-genlayer.zksync.dev'] },
+  },
+  consensusMainContract: {
+    ...testnetAsimov.consensusMainContract,
+    address: '0x67fd4aC71530FB220E0B7F90668BAF977B88fF07',
+  },
+  consensusDataContract: {
+    ...testnetAsimov.consensusDataContract,
+    address: '0xB6E1316E57d47d82FDcEa5002028a554754EF243',
+  },
+};
 
 // Объект для wallet_addEthereumChain / wallet_switchEthereumChain (MetaMask формат)
 const GENLAYER_NETWORK = {
@@ -52,12 +68,12 @@ function waitForProvider(timeoutMs = 4000) {
 
 // ── CLIENTS ──
 function initReadClient() {
-  readClient = createClient({ chain: testnetAsimov });
+  readClient = createClient({ chain: GENLAYER_CHAIN });
 }
 
 function initWriteClient(address, walletProvider) {
   writeClient = createClient({
-    chain: testnetAsimov,
+    chain: GENLAYER_CHAIN,
     account: address,
     provider: walletProvider,
   });
