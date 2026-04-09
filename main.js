@@ -81,32 +81,50 @@ async function getCurrentChainId() {
   } catch { return null; }
 }
 
-// Verify the wallet is actually connected to Bradbury by comparing
-// the latest block number from the wallet vs Bradbury's own RPC.
-// Asimov / Studio share Chain ID 4221 but run on different RPCs with
-// different block heights, so this reliably distinguishes them.
+// Bradbury has two RPC endpoints: wallet uses ZKSync Chain RPC, SDK uses GenLayer RPC.
+// Both serve the same chain but may have slightly different block heights.
+// Asimov/Studio share Chain ID 4221 but are separate chains with very different block heights.
+// We check both Bradbury RPCs in parallel and accept if wallet matches either one.
+const BRADBURY_RPCS = [
+  'https://zksync-os-testnet-genlayer.zksync.dev',
+  'https://rpc-bradbury.genlayer.com',
+];
+
+async function fetchBlockFromRpc(rpcUrl) {
+  const res = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_blockNumber', params: [], id: 1 }),
+  });
+  const json = await res.json();
+  return parseInt(json.result, 16);
+}
+
 async function isBradburyRpc() {
   try {
-    // Block number reported by the wallet's active RPC
     const walletHex = await provider.request({ method: 'eth_blockNumber' });
     const walletBlock = parseInt(walletHex, 16);
 
-    // Block number reported directly by Bradbury's ZKSync Chain RPC
-    const res = await fetch('https://zksync-os-testnet-genlayer.zksync.dev', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_blockNumber', params: [], id: 1 }),
-    });
-    const json = await res.json();
-    const bradburyBlock = parseInt(json.result, 16);
+    const results = await Promise.allSettled(BRADBURY_RPCS.map(fetchBlockFromRpc));
 
-    // Allow ±5 blocks of drift to account for timing differences
-    const diff = Math.abs(walletBlock - bradburyBlock);
-    const ok = diff <= 5;
-    console.log('[Network] Wallet block:', walletBlock, '| Bradbury block:', bradburyBlock, '| diff:', diff, '| match:', ok);
-    return ok;
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === 'fulfilled') {
+        const bradburyBlock = results[i].value;
+        const diff = Math.abs(walletBlock - bradburyBlock);
+        console.log(`[Network] Wallet block: ${walletBlock} | Bradbury RPC[${i}] block: ${bradburyBlock} | diff: ${diff}`);
+        if (diff <= 10) {
+          console.log('[Network] Matched Bradbury via', BRADBURY_RPCS[i]);
+          return true;
+        }
+      } else {
+        console.warn('[Network] RPC fetch failed for', BRADBURY_RPCS[i], ':', results[i].reason?.message);
+      }
+    }
+
+    console.warn('[Network] Wallet block does not match any Bradbury RPC');
+    return false;
   } catch (e) {
-    console.warn('[Network] RPC check failed, falling back to chain-id only:', e.message);
+    console.warn('[Network] RPC check error:', e.message);
     return false;
   }
 }
