@@ -357,10 +357,10 @@ async function getAnswer(question) {
       const elapsed = attempts * POLL_INTERVAL / 1000;
       const vtext = document.getElementById('validatorText');
       if (vtext) {
-        const total = 20;
+        const total = 13;
         const filled = Math.round((elapsed / MAX_SECONDS) * total);
         const bar = '▰'.repeat(filled) + '▱'.repeat(total - filled);
-        vtext.textContent = `validators at work  ${bar}  ${Math.round(elapsed)}s`;
+        vtext.textContent = `validators at work  ${bar}`;
       }
       try {
         txData = await readClient.getTransaction({ hash: txHash });
