@@ -345,10 +345,21 @@ async function getAnswer(question) {
 
     // Поллинг через getTransaction — waitForTransactionReceipt падает с
     // «no NewTransaction event found» на этой версии сети
+    const MAX_ATTEMPTS = 60;
+    const POLL_INTERVAL = 3000;
+    const MAX_SECONDS = MAX_ATTEMPTS * POLL_INTERVAL / 1000;
     let attempts = 0;
     let txData = null;
-    while (attempts < 60) {
-      await sleep(3000);
+
+    // Show progress timer
+    showProgressTimer(0, MAX_SECONDS);
+    const timerInterval = setInterval(() => {
+      const elapsed = attempts * POLL_INTERVAL / 1000;
+      showProgressTimer(elapsed, MAX_SECONDS);
+    }, POLL_INTERVAL);
+
+    while (attempts < MAX_ATTEMPTS) {
+      await sleep(POLL_INTERVAL);
       attempts++;
       try {
         txData = await readClient.getTransaction({ hash: txHash });
@@ -359,6 +370,9 @@ async function getAnswer(question) {
         console.warn('[Oracle] Poll attempt', attempts, ':', pollErr.message);
       }
     }
+
+    clearInterval(timerInterval);
+    hideProgressTimer();
 
     console.log('[Oracle] Final TX data:', txData);
 
@@ -459,6 +473,37 @@ function setTriangleText(text) {
 }
 function showValidators() { document.getElementById('validatorsStatus').classList.add('visible'); }
 function hideValidators()  { document.getElementById('validatorsStatus').classList.remove('visible'); }
+
+function showProgressTimer(elapsed, total) {
+  let bar = document.getElementById('progressTimer');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'progressTimer';
+    bar.style.cssText = [
+      'margin-top:10px',
+      'text-align:center',
+      'font-family:Rajdhani,Arial,sans-serif',
+    ].join(';');
+    bar.innerHTML = `
+      <div id="progressTimerText" style="font-size:11px;letter-spacing:.1em;color:#94a3b8;margin-bottom:5px;">0s / ${total}s</div>
+      <div style="width:180px;height:4px;background:rgba(255,255,255,.08);border-radius:4px;margin:0 auto;overflow:hidden;">
+        <div id="progressTimerBar" style="height:100%;width:0%;background:linear-gradient(90deg,#7c3aed,#a855f7);border-radius:4px;transition:width .3s ease;"></div>
+      </div>`;
+    const vs = document.getElementById('validatorsStatus');
+    if (vs) vs.appendChild(bar);
+  }
+  const pct = Math.min((elapsed / total) * 100, 100);
+  const txt = document.getElementById('progressTimerText');
+  const fill = document.getElementById('progressTimerBar');
+  if (txt) txt.textContent = `${Math.round(elapsed)}s / ${total}s`;
+  if (fill) fill.style.width = pct + '%';
+  bar.style.display = 'block';
+}
+
+function hideProgressTimer() {
+  const bar = document.getElementById('progressTimer');
+  if (bar) bar.style.display = 'none';
+}
 async function animateValidators() {
   const dots = [1,2,3,4,5].map(i=>document.getElementById('vd'+i));
   const text = document.getElementById('validatorText');
