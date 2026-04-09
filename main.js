@@ -357,9 +357,9 @@ async function getAnswer(question) {
       const elapsed = attempts * POLL_INTERVAL / 1000;
       const vtext = document.getElementById('validatorText');
       if (vtext) {
-        const totalDashes = 20;
-        const filled = Math.round((elapsed / MAX_SECONDS) * totalDashes);
-        const bar = '—'.repeat(filled) + '·'.repeat(totalDashes - filled);
+        const total = 20;
+        const filled = Math.round((elapsed / MAX_SECONDS) * total);
+        const bar = '▰'.repeat(filled) + '▱'.repeat(total - filled);
         vtext.textContent = `validators at work  ${bar}  ${Math.round(elapsed)}s`;
       }
       try {
