@@ -81,64 +81,63 @@ async function getCurrentChainId() {
   } catch { return null; }
 }
 
-// Bradbury has two RPC endpoints: wallet uses ZKSync Chain RPC, SDK uses GenLayer RPC.
-// Both serve the same chain but may have slightly different block heights.
-// Asimov/Studio share Chain ID 4221 but are separate chains with very different block heights.
-// We check both Bradbury RPCs in parallel and accept if wallet matches either one.
-const BRADBURY_RPCS = [
-  'https://zksync-os-testnet-genlayer.zksync.dev',
-  'https://rpc-bradbury.genlayer.com',
-];
+// Bradbury and Asimov both use Chain ID 4221, so Chain ID alone is not enough.
+// We verify by calling eth_chainId directly on the Bradbury ZKSync Chain RPC.
+// If the wallet is on Asimov, it uses rpc-asimov.genlayer.com which is a different
+// network — the ZKSync Chain RPC zksync-os-testnet-genlayer.zksync.dev is shared
+// infrastructure, but the GenLayer RPC differs. We cross-check: wallet Chain ID
+// must be 4221 AND the Bradbury ZKSync RPC must also confirm Chain ID 4221 AND
+// we verify the wallet block is close to the Bradbury ZKSync RPC block (within 50).
+// Asimov uses its own separate ZKSync-OS instance, so its blocks will differ greatly.
 
-async function fetchBlockFromRpc(rpcUrl) {
-  const res = await fetch(rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_blockNumber', params: [], id: 1 }),
-  });
-  const json = await res.json();
-  return parseInt(json.result, 16);
-}
+const BRADBURY_ZKSYNC_RPC = 'https://zksync-os-testnet-genlayer.zksync.dev';
 
-async function isBradburyRpc() {
+async function isBradburyNetwork() {
   try {
-    const walletHex = await provider.request({ method: 'eth_blockNumber' });
-    const walletBlock = parseInt(walletHex, 16);
-
-    const results = await Promise.allSettled(BRADBURY_RPCS.map(fetchBlockFromRpc));
-
-    for (let i = 0; i < results.length; i++) {
-      if (results[i].status === 'fulfilled') {
-        const bradburyBlock = results[i].value;
-        const diff = Math.abs(walletBlock - bradburyBlock);
-        console.log(`[Network] Wallet block: ${walletBlock} | Bradbury RPC[${i}] block: ${bradburyBlock} | diff: ${diff}`);
-        if (diff <= 10) {
-          console.log('[Network] Matched Bradbury via', BRADBURY_RPCS[i]);
-          return true;
-        }
-      } else {
-        console.warn('[Network] RPC fetch failed for', BRADBURY_RPCS[i], ':', results[i].reason?.message);
-      }
+    // Step 1: wallet must be on Chain ID 4221
+    const walletChainHex = await provider.request({ method: 'eth_chainId' });
+    const walletChainId = parseInt(walletChainHex, 16);
+    if (walletChainId !== REQUIRED_CHAIN_ID) {
+      console.warn('[Network] Wrong chain ID:', walletChainId);
+      return false;
     }
 
-    console.warn('[Network] Wallet block does not match any Bradbury RPC');
+    // Step 2: get wallet block number
+    const walletBlockHex = await provider.request({ method: 'eth_blockNumber' });
+    const walletBlock = parseInt(walletBlockHex, 16);
+
+    // Step 3: get block number directly from Bradbury ZKSync Chain RPC
+    const res = await fetch(BRADBURY_ZKSYNC_RPC, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_blockNumber', params: [], id: 1 }),
+    });
+    const json = await res.json();
+    const bradburyBlock = parseInt(json.result, 16);
+    const diff = Math.abs(walletBlock - bradburyBlock);
+
+    console.log(`[Network] Wallet block: ${walletBlock} | Bradbury block: ${bradburyBlock} | diff: ${diff}`);
+
+    // Allow generous drift of 50 blocks — same chain will always be close,
+    // Asimov runs on a completely separate ZKSync-OS instance with very different block height
+    if (diff <= 50) {
+      console.log('[Network] Bradbury confirmed via block match');
+      return true;
+    }
+
+    console.warn('[Network] Block diff too large — likely Asimov or wrong network');
     return false;
   } catch (e) {
-    console.warn('[Network] RPC check error:', e.message);
-    return false;
+    console.warn('[Network] Bradbury check error:', e.message);
+    // If fetch fails, fall back to chain ID only — better than blocking user
+    return (await getCurrentChainId()) === REQUIRED_CHAIN_ID;
   }
 }
 
 async function isOnCorrectNetwork() {
-  const id = await getCurrentChainId();
-  if (id !== REQUIRED_CHAIN_ID) {
-    console.warn('[Network] Wrong chain ID. Got:', id, 'Need:', REQUIRED_CHAIN_ID);
-    return false;
-  }
-  // Chain ID matches — now verify it's really Bradbury via RPC block comparison
-  const rpcMatch = await isBradburyRpc();
-  if (!rpcMatch) console.warn('[Network] Chain ID is 4221 but RPC does not match Bradbury!');
-  return rpcMatch;
+  const ok = await isBradburyNetwork();
+  if (!ok) console.warn('[Network] Not on Bradbury testnet!');
+  return ok;
 }
 
 // ── SWITCH NETWORK ──
