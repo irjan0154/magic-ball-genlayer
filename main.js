@@ -75,12 +75,52 @@ async function getCurrentChainId() {
   if (!provider) return null;
   try {
     const hex = await provider.request({ method: 'eth_chainId' });
-    return parseInt(hex, 16);
+    const id = parseInt(hex, 16);
+    console.log('[Network] Current chain ID:', id, '(hex:', hex, ')');
+    return id;
   } catch { return null; }
 }
 
+// Verify the wallet is actually connected to Bradbury by comparing
+// the latest block number from the wallet vs Bradbury's own RPC.
+// Asimov / Studio share Chain ID 4221 but run on different RPCs with
+// different block heights, so this reliably distinguishes them.
+async function isBradburyRpc() {
+  try {
+    // Block number reported by the wallet's active RPC
+    const walletHex = await provider.request({ method: 'eth_blockNumber' });
+    const walletBlock = parseInt(walletHex, 16);
+
+    // Block number reported directly by Bradbury's ZKSync Chain RPC
+    const res = await fetch('https://zksync-os-testnet-genlayer.zksync.dev', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_blockNumber', params: [], id: 1 }),
+    });
+    const json = await res.json();
+    const bradburyBlock = parseInt(json.result, 16);
+
+    // Allow ±5 blocks of drift to account for timing differences
+    const diff = Math.abs(walletBlock - bradburyBlock);
+    const ok = diff <= 5;
+    console.log('[Network] Wallet block:', walletBlock, '| Bradbury block:', bradburyBlock, '| diff:', diff, '| match:', ok);
+    return ok;
+  } catch (e) {
+    console.warn('[Network] RPC check failed, falling back to chain-id only:', e.message);
+    return false;
+  }
+}
+
 async function isOnCorrectNetwork() {
-  return (await getCurrentChainId()) === REQUIRED_CHAIN_ID;
+  const id = await getCurrentChainId();
+  if (id !== REQUIRED_CHAIN_ID) {
+    console.warn('[Network] Wrong chain ID. Got:', id, 'Need:', REQUIRED_CHAIN_ID);
+    return false;
+  }
+  // Chain ID matches — now verify it's really Bradbury via RPC block comparison
+  const rpcMatch = await isBradburyRpc();
+  if (!rpcMatch) console.warn('[Network] Chain ID is 4221 but RPC does not match Bradbury!');
+  return rpcMatch;
 }
 
 // ── SWITCH NETWORK ──
@@ -100,12 +140,12 @@ window.switchNetwork = async function () {
         await provider.request({ method: 'wallet_addEthereumChain', params: [GENLAYER_NETWORK] });
       } catch {
         showToastMsg('Add GenLayer Testnet Chain manually in your wallet.');
-        if (btn) { btn.textContent = 'Try Auto-Switch'; btn.disabled = false; }
+        if (btn) { btn.textContent = 'Switch'; btn.disabled = false; }
         return;
       }
     } else if (err.code === 4001) {
       showToastMsg('Rejected. Switch the network manually in your wallet.');
-      if (btn) { btn.textContent = 'Try Auto-Switch'; btn.disabled = false; }
+      if (btn) { btn.textContent = 'Switch'; btn.disabled = false; }
       return;
     }
   }
@@ -121,11 +161,11 @@ window.switchNetwork = async function () {
       hideNetworkBanner();
       if (walletAddress) initWriteClient(walletAddress, provider);
       showToastMsg('✓ Switched to GenLayer Bradbury Testnet');
-      if (btn) { btn.textContent = 'Try Auto-Switch'; btn.disabled = false; }
+      if (btn) { btn.textContent = 'Switch'; btn.disabled = false; }
     } else if (attempts >= 60) {
       clearInterval(poll);
       showToastMsg('Not switched. Please switch manually in your wallet.');
-      if (btn) { btn.textContent = 'Try Auto-Switch'; btn.disabled = false; }
+      if (btn) { btn.textContent = 'Switch'; btn.disabled = false; }
     }
   }, 500);
 };
@@ -151,18 +191,11 @@ function showNetworkBanner() {
       Chain ID: <strong style="color:#c084fc;">4221</strong> &nbsp;|&nbsp;
       RPC: <strong style="color:#c084fc;">zksync-os-testnet-genlayer.zksync.dev</strong>
     </div>
-    <div style="color:#64748b;font-size:11px;margin-bottom:14px;line-height:1.7;text-align:left;
-      background:rgba(255,255,255,.03);border-radius:8px;padding:8px 12px;">
-      <strong style="color:#94a3b8;">To switch manually:</strong><br>
-      Open your wallet → Networks → find or add<br>
-      <em style="color:#c084fc;">GenLayer Bradbury Testnet</em> (Chain ID 4221)<br>
-      <span style="color:#475569;font-size:10px;">Any request will be blocked until correct network is set.</span>
-    </div>
     <button onclick="window.switchNetwork()" style="
       background:linear-gradient(135deg,#7c3aed,#a855f7);border:none;color:#fff;
       font-family:Rajdhani,Arial,sans-serif;font-size:13px;font-weight:600;
       letter-spacing:.06em;padding:8px 22px;border-radius:8px;cursor:pointer;">
-      Try Auto-Switch</button>`;
+      Switch</button>`;
   b.style.display = 'block';
 }
 
@@ -215,12 +248,17 @@ window.connectWallet = async function () {
       }
     });
 
-    provider.on('accountsChanged', (accs) => {
+    provider.on('accountsChanged', async (accs) => {
       if (!accs.length) { disconnectWallet(); return; }
       walletAddress = accs[0];
-      initWriteClient(walletAddress, provider);
       document.getElementById('connectBtn').textContent =
         walletAddress.slice(0, 6) + '…' + walletAddress.slice(-4);
+      if (await isOnCorrectNetwork()) {
+        initWriteClient(walletAddress, provider);
+      } else {
+        writeClient = null;
+        showNetworkBanner();
+      }
     });
 
   } catch (e) {
@@ -334,7 +372,7 @@ async function getAnswer(question) {
     // «no NewTransaction event found» на этой версии сети
     let attempts = 0;
     let txData = null;
-    while (attempts < 120) {
+    while (attempts < 60) {
       await sleep(3000);
       attempts++;
       try {
@@ -350,7 +388,7 @@ async function getAnswer(question) {
     console.log('[Oracle] Final TX data:', txData);
 
     if (!txData || txData.status < 5) {
-      showToastMsg('Validators are still deliberating… Check back later.');
+      showToastMsg('Validators failed to reach consensus. Please try again.');
       return '...';
     }
 
