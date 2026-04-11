@@ -3,7 +3,7 @@ import { testnetBradbury } from 'genlayer-js/chains';
 import { TransactionStatus } from 'genlayer-js/types';
 
 // ── CONSTANTS ──
-const CONTRACT_ADDRESS   = '0xfb4624cd2d8160E1F442B90B15d5d5Ff7b964a2c';
+const CONTRACT_ADDRESS   = '0xfcb4E36a182650Bb203A9d6C95fbcbd647977f42';
 const GEN_PRICE          = BigInt('1000000000000000000'); // 1 GEN
 const REQUIRED_CHAIN_ID  = 4221;
 const REQUIRED_CHAIN_HEX = '0x107d';
